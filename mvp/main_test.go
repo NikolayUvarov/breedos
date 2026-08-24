@@ -570,3 +570,59 @@ func TestExternalDatasetTakesPrecedenceOverEmbedded(t *testing.T) {
 		t.Fatalf("expected first accession EXT_A; got %q", ds.accessionIDs[0])
 	}
 }
+
+// TestSimulateNotesStayRunScoped guards the notes array of the biological
+// simulate response against release-changelog content.
+//
+// Regression: v0.7.31 through v0.7.38 shipped a promptbio changelog as note #2.
+// By v0.7.38 it was 28,982 characters — 96% of the whole notes payload — and it
+// rendered verbatim into the demo Decision Report (static/app.js renders every
+// note as a .note-item div). See issues-breedos/33.
+//
+// Notes describe the RUN (configuration, thresholds, scope limits, data
+// provenance). Release information belongs in CHANGELOG.md and /api/version.
+func TestSimulateNotesStayRunScoped(t *testing.T) {
+	req := SimRequest{
+		Seed: 42, PopulationSize: 60, Markers: 120, QTLCount: 20, Generations: 10,
+		SelectionPercent: 20, Heritability: 0.4, MutationRate: 0.001,
+		CrisprEnabled: true, CrisprEdits: 3, CrisprIntroPercent: 10,
+		StrategySet: "core", Replicates: 2,
+		InbreedingLimit: 0.25, DiversityLossLimit: 0.30,
+	}
+	resp, err := runSimulation(req)
+	if err != nil {
+		t.Fatalf("runSimulation failed: %v", err)
+	}
+	if len(resp.Notes) == 0 {
+		t.Fatalf("expected run notes, got none")
+	}
+
+	// A changelog pasted into a note is long. Longest legitimate note today is
+	// the 352-char edit-classifier explanation.
+	const maxNoteLen = 600
+	// Vocabulary that only appears in promptbio material. The biological
+	// simulator has no reason to emit any of it.
+	forbidden := []string{
+		"promptbio", "prompt organism", "prompt genome", "genome_score",
+		"pattern card", "anti-pattern", "pml-", "locus",
+	}
+
+	for i, n := range resp.Notes {
+		if len(n) > maxNoteLen {
+			t.Errorf("note[%d] is %d chars, exceeds %d — release changelogs belong in CHANGELOG.md / /api/version, not in simulation notes; got: %.120q...",
+				i, len(n), maxNoteLen, n)
+		}
+		low := strings.ToLower(n)
+		for _, bad := range forbidden {
+			if strings.Contains(low, bad) {
+				t.Errorf("note[%d] contains forbidden promptbio vocabulary %q — the biological simulate response must not describe the prompt substrate; got: %.120q...",
+					i, bad, n)
+			}
+		}
+	}
+
+	// Sanity bound: notes are a short run summary, not a document.
+	if len(resp.Notes) > 15 {
+		t.Errorf("notes count %d is implausibly high for a run summary", len(resp.Notes))
+	}
+}

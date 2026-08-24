@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.39] - 2026-08-24
+
+### Fixed — biological surface stops advertising the prompt substrate
+
+Closes `issues-breedos/33-release-changelog-leak-in-simulate-notes.md`.
+
+**`POST /api/simulate` notes no longer carry a release changelog.**
+`buildNotes()` emitted a hand-edited "latest release" note as entry #2 of
+the biological simulate response. From v0.7.31 through v0.7.38 that slot
+carried promptbio changelog text; at v0.7.38 it was **28,982 characters**,
+96% of the whole 30,144-byte notes payload, describing prompt-organism
+design patterns. `static/app.js` renders every note verbatim into the demo
+Decision Report, so a breeder running a simulation saw a 29 KB wall of
+LLM-prompt jargon in position 2 of their breeding report.
+
+- notes payload: **30,144 → 1,162 bytes (−96.1%)**; 8 → 7 entries;
+  longest note 28,982 → 352 chars.
+- Simulation numbers are **bit-identical** — `decision`, `strategies` and
+  `candidate_edits` compare byte-for-byte on the same seed. Presentation only.
+- New regression test `TestSimulateNotesStayRunScoped` guards the class of
+  defect: per-note length cap (600 chars), a forbidden promptbio vocabulary
+  list, and a note-count bound. Verified to fail when the v0.7.38 note is
+  reintroduced.
+
+**Demo page kicker no longer lists promptbio modules.** `demo.html` headed
+the Selection Strategy Simulator with "Promptbio v0.1 Mapper + v0.2 Diff +
+Issue 07 Substrate + v0.3 Evolution Loop". Replaced with the biological
+workflow it actually describes: constraints, strategy comparison, Pareto,
+decision report, edit-vs-cross-vs-wait.
+
+Release information belongs in this file and in `/api/version`, never in a
+simulation result. Both fixes restore the handoff §3.2 contract: no
+promptbio change may alter biological BreedOS output, routes or UI.
+
+### Changed
+
+- Version footers across `index*.html`, `demo.html`, `datasets.html`,
+  `theory.html`, `promptbio.html` were stale at v0.7.34/v0.7.38; all now
+  read v0.7.39.
+
+### Known issues
+
+- `selection_percent` is a 0–100 percent with no range validation; passing a
+  fraction (`0.2`) is accepted silently and produces a degenerate 2-parent
+  run with F≈0.96 and a full, plausible-looking Decision Report. Tracked in
+  `issues-breedos/34-selection-percent-unit-ambiguity.md` — the fix is an API
+  contract change and is deliberately not bundled here.
+
+
 ## [0.7.38] - 2026-06-29
 
 ### Added — Issue 34 Promptbio v3.1 Prompt Organism Design Patterns
