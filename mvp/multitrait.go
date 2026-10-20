@@ -440,7 +440,7 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 	// scores; the multi-trait path does not run it.
 	strategies := make([]strategyConfig, 0)
 	for _, cfg := range buildStrategyConfigs(req) {
-		if cfg.Rule != "ocs_target" {
+		if cfg.Rule != "ocs_target" && !cfg.SelectInTargetEnv {
 			strategies = append(strategies, cfg)
 		}
 	}

@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.7] - 2026-10-20
+
+### Changed — climate as genotype × environment interaction (Issue 38)
+
+The climate scenario used to multiply the recorded trait mean by
+(1 − penalty) after simulation. That preserves every ranking, so climate
+could never change which strategy is best. The robustness of ancestral
+introgression was also an input: a hard-coded "ancestral lines bear half the
+penalty". Single-trait runs now model each stress as G×E (`gxe.go`):
+
+- **Two correlated traits.** Performance in normal and stress seasons are
+  two additive traits.
+  - A fraction **rg** of the normal-season QTL also act under stress; the
+    rest are yield-potential-only.
+  - As many stress-only QTL are drawn from other markers.
+  - The founder genetic correlation is reported and tracks rg (test).
+  - Defaults per mode are 0.4–0.6, typical of wheat/maize G×E studies.
+  - New optional fields `climate.rg` and `climate.frequency` (share of
+    stressed seasons, default 0.5).
+- **Target.** v = (1 − f)·normal + f·(1 − loss)·stress, an additive trait.
+  Gain, σA, Pareto and the decision report are all on it; the mode's mean
+  yield loss is the existing calibrated penalty × severity.
+- **Selection.** Existing strategies select in normal-season nurseries. The
+  new **Target-environment selection** (advanced set, with a climate
+  scenario) selects on the target mix of seasons (multi-environment /
+  managed-stress trials). Under terminal drought (f 0.5, rg 0.5) it reaches
+  30.5 vs 27.6 for nursery truncation; with rg 0.2 and f 0.7, 21.4 vs 16.9.
+  The ranking changes.
+- **Ancestral lines** are generated from genetics:
+  - favourable at stress-only loci with probability 0.5 + 0.45·t, where
+    `ancestral_stress_tolerance` = t now means the strength of stress
+    adaptation;
+  - depleted at yield-potential loci;
+  - drawn from the founder frequencies elsewhere.
+
+  With t ≈ 0 they gain nothing under stress (test). The per-strategy
+  penalty discount no longer applies to single-trait runs.
+- Climate-robustness section: the caveat now describes the G×E model, and
+  the ancestral advice says the trade only pays off when selection sees the
+  stress.
+- **Legacy.** Multi-trait runs keep the uniform penalty, stated in the
+  caveat. `TestRunSimulation_ClimatePenaltyDropsRecordedGain` was rewritten
+  for the new semantics: nursery selection keeps ≈ 0.64 of the
+  normal-season gain under heat at grain filling, instead of exactly 0.54.
+
+### Noted, not changed
+
+The risk-adjusted score (weighted gain, diversity, F, risk) can rank
+ancestral introgression first even without stress, because the landrace
+lines raise diversity and lower F. That is a property of the score weights
+in the decision layer. For a gain-first recommendation, set constraints
+(e.g. `min_genetic_gain`) and read `best_feasible`.
+
+### Tests
+
+`gxe_test.go`:
+- founder rg tracks 0.3 / 0.7;
+- target-environment selection wins under strong G×E, and appears only
+  with a climate scenario;
+- the ancestral stress advantage disappears at tolerance ≈ 0.
+
 ## [0.8.6] - 2026-10-20
 
 ### Added — marker effects estimated from uploaded phenotypes (Issue 37)

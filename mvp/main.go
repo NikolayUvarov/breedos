@@ -305,6 +305,9 @@ type runModel struct {
 	varEnv   float64
 	gsErrVar float64
 	sigmaA0  float64
+	// v0.8.7 — Issue 38. Environmental variance for selection on the
+	// target-season value under G×E.
+	varEnvTarget float64
 }
 
 func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []float64) runModel {
@@ -398,6 +401,9 @@ type strategyConfig struct {
 	// are not tracked through reproduction, so the prediction can no
 	// longer be looked up).
 	UseImportedGEBV bool
+	// v0.8.7 — Issue 38. Select on the target mix of seasons
+	// (multi-environment trials) instead of normal-season nurseries.
+	SelectInTargetEnv bool
 	// v0.7.29 — Issue 08. Per-organism imported GEBVs aligned with the
 	// gen-0 population order (NaN means "no prediction for this index;
 	// fall back to internal scoring"). Populated by runSimulation
@@ -866,11 +872,23 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	gm := buildGenomeMap(req, datasetMeta)
 	initFounders(initial, gm, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset)))
 	model := newRunModel(req, gm, initial, effects)
+	// v0.8.7 — Issue 38. Under a climate scenario, selection uses the
+	// normal-season effects while every metric is on the target mix of
+	// seasons (gxe.go).
+	metricEffects := effects
+	gxe := buildGxE(effects, req.Climate, rand.New(rand.NewSource(req.Seed+gxeSeedOffset)))
+	if gxe != nil {
+		metricEffects = gxe.target
+		_, vgT := meanVar(geneticValues(initial, gxe.target))
+		model.sigmaA0 = math.Sqrt(vgT)
+		model.varEnvTarget = environmentalVariance(vgT, req.Heritability)
+		gxe.founderRG = round4(pearson(geneticValues(initial, effects), geneticValues(initial, gxe.stress)))
+	}
 	baseFreq := alleleFreq(initial, req.Markers)
 	baseDiversity := diversityFromFreq(baseFreq)
-	baseMean := meanGeneticValue(initial, effects)
-	rareUsefulAtStart := rareUsefulLoci(baseFreq, effects)
-	candidates := rankEditCandidates(baseFreq, editScaleEffects(effects, effectEstimate != nil), req.CrisprEdits, baseDiversity)
+	baseMean := meanGeneticValue(initial, metricEffects)
+	rareUsefulAtStart := rareUsefulLoci(baseFreq, metricEffects)
+	candidates := rankEditCandidates(baseFreq, editScaleEffects(metricEffects, effectEstimate != nil), req.CrisprEdits, baseDiversity)
 	// v0.7.29 — Issue 08. Patch the imported-GEBV slice onto the
 	// imported_gebv strategy entry (if present). Computed once from
 	// the upload's accession IDs; aligned with the gen-0 population.
@@ -885,7 +903,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		}
 	}
 	reportProgress(progress, 5, "initial population, candidate edits, and strategy set ready")
-	results := simulateStrategiesDecisionEngine(req, strategies, model, initial, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, candidates, progress, snapshot)
+	results := simulateStrategiesDecisionEngine(req, strategies, model, initial, metricEffects, effects, gxe, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, candidates, progress, snapshot)
 	annotateDecisionScores(results)
 	annotateFeasibility(req, results, baseDiversity)
 	decision := buildDecisionSummary(req, results, baseDiversity)
@@ -901,6 +919,10 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	decision.EditDecisions = summarizeEditDecisions(candidates)
 	reportProgress(progress, 98, "building response")
 	notes := buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm)
+	if gxe != nil {
+		notes = append(notes, fmt.Sprintf("Climate as G×E: %s in %.0f%% of seasons with a %.0f%% mean yield loss. Normal- and stress-season performance share %d QTL; %d act only in normal seasons (yield potential) and %d only under stress. Founder genetic correlation rg = %.2f (target %.2f). Strategies select in normal-season nurseries unless marked otherwise; gain is reported for the target mix of seasons.", req.Climate.Mode, 100*gxe.frequency, 100*gxe.loss, gxe.nShared, gxe.nNormal, gxe.nStress, gxe.founderRG, gxe.rg))
+		decision.KeyAssumptions = append(decision.KeyAssumptions, fmt.Sprintf("Climate stress modelled as genotype × environment interaction (rg = %.2f between normal and stress seasons), not as a uniform penalty.", gxe.founderRG))
+	}
 	if effectEstimate != nil {
 		e := effectEstimate
 		sub := ""
@@ -941,6 +963,9 @@ func editScaleEffects(effects []float64, estimated bool) []float64 {
 	}
 	return out
 }
+
+// gxeSeedOffset separates the G×E architecture draw from the run stream.
+const gxeSeedOffset = 0x06e0_0870
 
 // founderPhaseSeedOffset separates the founder-phase RNG stream from the
 // main run stream (v0.8.0).
@@ -1095,6 +1120,21 @@ func buildStrategyConfigs(req SimRequest) []strategyConfig {
 			UseImportedGEBV:  true,
 		})
 	}
+	// v0.8.7 — Issue 38. With a climate scenario, compare against
+	// selection in the target mix of seasons (single-trait only; the
+	// multi-trait path filters it out).
+	if req.Climate != nil && req.Climate.Mode != "" && req.Climate.Mode != "normal" && len(req.Traits) == 0 {
+		strategies = append(strategies, strategyConfig{
+			Name:              "Target-environment selection",
+			Code:              "target_env",
+			Summary:           "Truncation selection on performance across the target mix of normal and stress seasons (multi-environment or managed-stress trials) instead of normal-season nurseries.",
+			Rule:              "phenotype",
+			MatingRule:        "random",
+			TraitWeight:       1.0,
+			ParentMultiplier:  1.0,
+			SelectInTargetEnv: true,
+		})
+	}
 	// v0.7.28 — Issue 30. Ancestral-allele introgression strategy.
 	// Available only when the operator enables the advanced strategy
 	// set AND sets ancestral_intro_percent > 0. Lower trait baseline
@@ -1128,7 +1168,7 @@ type strategyTaskResult struct {
 	Result        StrategyResult
 }
 
-func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfig, model runModel, initial []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, candidates []EditCandidate, progress progressFunc, snapshot snapshotFunc) []StrategyResult {
+func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfig, model runModel, initial []organism, effects, selEffects []float64, gxe *gxeModel, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, candidates []EditCandidate, progress progressFunc, snapshot snapshotFunc) []StrategyResult {
 	strategyCount := len(strategies)
 	jobCount := strategyCount * req.Replicates
 	resultsByStrategy := make([][]StrategyResult, strategyCount)
@@ -1201,11 +1241,24 @@ func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfi
 				// CRISPR seed so the two can co-exist (a hybrid strategy
 				// could use both — out of scope for v0.9).
 				if task.Config.UseAncestralSeed {
-					seedAncestralLines(strategyPop, req.AncestralIntroPercent, req.Markers, rand.New(rand.NewSource(req.Seed+int64(700000+task.StrategyIndex*1013+task.Replicate*103))))
+					ancRNG := rand.New(rand.NewSource(req.Seed + int64(700000+task.StrategyIndex*1013+task.Replicate*103)))
+					if gxe != nil {
+						tol := req.AncestralStressTolerance
+						if tol <= 0 {
+							tol = AncestralStressToleranceDefault
+						}
+						seedAncestralLinesGxE(strategyPop, req.AncestralIntroPercent, selEffects, gxe, baseFreq, tol, ancRNG)
+					} else {
+						seedAncestralLines(strategyPop, req.AncestralIntroPercent, req.Markers, ancRNG)
+					}
+				}
+				taskModel, taskSel := model, selEffects
+				if task.Config.SelectInTargetEnv && gxe != nil {
+					taskModel.varEnv, taskSel = model.varEnvTarget, effects
 				}
 				strategyRNG := rand.New(rand.NewSource(req.Seed + int64(1000+task.StrategyIndex*31337+task.Replicate*7919)))
 				emitSnapshot := snapshot != nil && task.StrategyIndex == trackIdx && task.Replicate == 0
-				res := simulateStrategy(req, task.Config, model, strategyPop, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, strategyRNG, func(gen int, currentPop []organism) {
+				res := simulateStrategy(req, task.Config, taskModel, strategyPop, effects, taskSel, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, strategyRNG, func(gen int, currentPop []organism) {
 					done := atomic.AddInt64(&completedSteps, 1)
 					percent := 6 + int(math.Round(float64(done)*91.0/float64(totalSteps)))
 					reportProgress(progress, percent, fmt.Sprintf("parallel run: %d/%d strategy-generations complete; %s replicate %d/%d generation %d/%d", done, totalSteps, task.Config.Name, task.Replicate+1, req.Replicates, gen, generationsFor(req, task.Config)))
@@ -1323,7 +1376,11 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	// without climate stress are bit-identical to v0.7.23).
 	// v0.7.28 — Issue 30. Per-strategy climate-penalty discount.
 	// Default 1.0 (no discount) reproduces v0.7.24 behaviour.
-	applyClimatePenaltyToMetricsWithDiscount(metrics, req.Climate, climateDiscountForStrategy(cfg, req))
+	// v0.8.7 — Issue 38. Single-trait runs model climate as G×E (gxe.go);
+	// the legacy uniform penalty remains for the multi-trait path only.
+	if len(req.Traits) > 0 {
+		applyClimatePenaltyToMetricsWithDiscount(metrics, req.Climate, climateDiscountForStrategy(cfg, req))
+	}
 	gains, divs, inbr := make([]float64, 0, len(reps)), make([]float64, 0, len(reps)), make([]float64, 0, len(reps))
 	rareLossEvents, inbreedingBreaches, diversityCollapses := 0, 0, 0
 	for _, rep := range reps {
@@ -2235,12 +2292,12 @@ func clonePopulation(pop []organism) []organism {
 	return out
 }
 
-func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
+func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects, selEffects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
 	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0))
 	cycle := cycleYearsFor(req, cfg)
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
-		parents := selectParents(pop, effects, req, cfg, model, rng, gen)
+		parents := selectParents(pop, selEffects, req, cfg, model, rng, gen)
 		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
 		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents))
 		m.Year = round4(float64(gen) * cycle)
@@ -2760,6 +2817,8 @@ func recommendationFor(code string, f FinalStats) string {
 		return "Good practical baseline; compare against genomic and OCS-like strategies under noise." + riskText
 	case "genomic":
 		return "Promising when marker/phenotype data support prediction; replace mock predictor with real GEBV models." + riskText
+	case "target_env":
+		return "Use when the target environments include stress the nursery does not see: selecting in the target mix of seasons captures stress-only alleles that normal-season selection leaves to drift." + riskText
 	case "ocs":
 		return "Use to hold inbreeding at a chosen rate: it maximises expected gain per generation at exactly target_delta_f (1% ≈ Ne 50). Under mass selection on phenotype its gain at equal ΔF is comparable to truncation; the advantage grows with EBVs that carry family information." + riskText
 	case "ocs_like":

@@ -48,6 +48,11 @@ type ClimateStressMode struct {
 type ClimateScenario struct {
 	Mode     string  `json:"mode"`
 	Severity float64 `json:"severity"`
+	// v0.8.7 — Issue 38 (gxe.go). Frequency is the share of seasons under
+	// this stress (default 0.5); RG overrides the mode's genetic
+	// correlation between normal- and stress-season performance.
+	Frequency float64 `json:"frequency,omitempty"`
+	RG        float64 `json:"rg,omitempty"`
 }
 
 // climateModes is the immutable catalogue. Adding a new mode requires
@@ -166,6 +171,12 @@ func ValidateClimateScenario(scen *ClimateScenario) error {
 	}
 	if scen.Severity < 0 {
 		return fmt.Errorf("climate severity must be ≥ 0, got %v", scen.Severity)
+	}
+	if scen.Frequency < 0 || scen.Frequency > 1 {
+		return fmt.Errorf("climate frequency must be in [0, 1] (share of stressed seasons), got %v", scen.Frequency)
+	}
+	if scen.RG < 0 || scen.RG > 1 {
+		return fmt.Errorf("climate rg must be in [0, 1], got %v", scen.RG)
 	}
 	return nil
 }

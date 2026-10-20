@@ -8,6 +8,7 @@ const colors = {
   balanced: '#8fffd1',
   balanced_crispr: '#ffd38c',
   ocs: '#f2f2a0',
+  target_env: '#7fe0ff',
   ocs_like: '#c2ff8c',
   cross_planner: '#ffdf70',
   edit_introgression: '#ffb070'
@@ -23,6 +24,7 @@ const labels = {
   balanced: 'Balanced',
   balanced_crispr: 'Balanced + CRISPR',
   ocs: 'OCS (ΔF target)',
+  target_env: 'Target-environment selection',
   ocs_like: 'OCS-like',
   cross_planner: 'Cross planner',
   edit_introgression: 'Edit introgression'
@@ -1539,7 +1541,7 @@ function strategyCountForRequest(req) {
   const advanced = String(req.strategy_set || 'core') === 'advanced';
   // v0.8.5: advanced adds OCS with a ΔF target (single-trait only).
   const multi = !!(multiTraitState.traits && multiTraitState.traits.length);
-  const base = advanced ? (multi ? 9 : 10) : 4;
+  const base = (advanced ? (multi ? 9 : 10) : 4) + (Number(req.__extra_strategies) || 0);
   const crisprActive = Boolean(req.crispr_enabled) && (Number(req.crispr_edits) || 0) > 0;
   if (!crisprActive) return base;
   return base + (advanced ? 2 : 1);
@@ -1809,6 +1811,9 @@ function updateSensBudgetMeter() {
     values = parseSensValues(byId('sensValues') ? byId('sensValues').value : '');
   }
   const req = requestFromForm();
+  // v0.8.7 — Issue 38. Climate scenarios add target-environment selection
+  // to the advanced set; count it so the pre-flight matches the server.
+  if (axis === 'climate_scenario' && String(req.strategy_set) === 'advanced') req.__extra_strategies = 1;
   const sweep = sensitivityCostCells(req, values);
   const over = sweep > BUDGET_CAP;
   const warn = !over && sweep > BUDGET_CAP * BUDGET_WARN_FRAC;

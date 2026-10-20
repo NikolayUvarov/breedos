@@ -48,7 +48,7 @@ func buildClimateRobustnessSection(req SensitivityRequest, scenarios []Sensitivi
 	}
 
 	out := &ClimateRobustness{
-		HonestyCaveat: "Climate penalties are applied uniformly across the population (no per-genotype heat-tolerance QTL modelling yet). Real-world tolerance is genotype-dependent and will diverge from these simulations in detail.",
+		HonestyCaveat: "Single-trait runs model each stress as genotype × environment interaction: normal- and stress-season performance are genetically correlated traits with shared, yield-potential-only and stress-only QTL (default rg per mode, 0.4–0.6, overridable), so rankings can change between scenarios. There is no location × year trial structure, and multi-trait runs still use the legacy uniform penalty.",
 	}
 
 	// Count how many scenarios match the baseline strategy.
@@ -112,7 +112,7 @@ func buildClimateRobustnessSection(req SensitivityRequest, scenarios []Sensitivi
 		ancestralWinsIn := failureBests["ancestral_introgression"]
 		switch {
 		case len(ancestralWinsIn) > 0:
-			out.AncestralAdvice = fmt.Sprintf("Ancestral introgression (%.0f%% landrace seeding) wins the best-feasible verdict under %s. It carries a roughly %.0f%% lower trait baseline at zero stress, traded for partial climate-penalty absorption when stress occurs — use it when the planning horizon expects the named modes more often than calm weather.", req.Base.AncestralIntroPercent, strings.Join(ancestralWinsIn, " or "), req.Base.AncestralIntroPercent)
+			out.AncestralAdvice = fmt.Sprintf("Ancestral introgression (%.0f%% landrace seeding) wins the best-feasible verdict under %s. Its landrace lines carry stress-adapted alleles but fewer yield-potential alleles, so it trades zero-stress performance for stress performance. The trade pays off only when selection sees the stress (target-environment or managed-stress trials) and the planning horizon expects the named modes often.", req.Base.AncestralIntroPercent, strings.Join(ancestralWinsIn, " or "))
 		case summary.BaselineBestCode == "ancestral_introgression":
 			out.AncestralAdvice = fmt.Sprintf("Ancestral introgression (%.0f%% landrace seeding) is the baseline best-feasible — the climate-stressed scenarios in this sweep already favour the landrace-augmented founder pool. Quantify the zero-stress trait drag separately before committing.", req.Base.AncestralIntroPercent)
 		default:

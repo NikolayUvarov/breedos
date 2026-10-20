@@ -24,6 +24,10 @@ BreedOS runs Monte Carlo simulations of a breeding population under competing se
 - **Interpretable units.** Gain is reported in trait units and in founder-σA units. ΔF per generation and Ne = 1/(2ΔF) are reported for every strategy.
 - **Calendar time (optional).** With `cycle_years` set, every strategy runs as many of its own cycles as fit into the same horizon. Genomic strategies can cycle faster (`genomic_cycle_years`). Results add gain per year and ΔF per year, and the charts switch to a year axis.
 - Additive QTL effects; optional multi-trait selection indices with genetic correlations.
+- **Climate as G×E.** With `climate: {mode, severity, frequency, rg}`, normal- and stress-season performance are two genetically correlated traits:
+  - a fraction rg of the QTL is shared;
+  - the rest act only in normal seasons (yield potential) or only under stress;
+  - gain is reported on the target mix (1−f)·normal + f·(1−loss)·stress, so climate can change which strategy wins.
 
 ### Strategies
 
@@ -34,7 +38,8 @@ BreedOS runs Monte Carlo simulations of a breeding population under competing se
 - **Genomic selection mock**: prediction with a configurable accuracy (`genomic_accuracy`, default √h²) that decays as VG erodes. A placeholder for GBLUP / Bayesian / ML predictors.
 - **Imported GEBV**: generation-0 parents ranked by breeding values from your own rrBLUP / BGLR / sommer / AlphaSimR pipeline.
 - **CRISPR-enabled**: balanced + CRISPR seed and edit-aware introgression. Candidate edits are classified edit / cross / wait, with an EU NGT-1 / NGT-2 planning classification under Annex I (not legal advice).
-- **Ancestral introgression** for climate-stress scenarios.
+- **Ancestral introgression** for climate-stress scenarios. The landrace lines are enriched for stress-adapted alleles and depleted at yield-potential loci.
+- **Target-environment selection** (with a climate scenario): selection on the target mix of normal and stress seasons, instead of normal-season nurseries.
 
 ### Decision layer
 
@@ -50,7 +55,7 @@ Core mode runs a four-strategy subset (plus the CRISPR strategy when enabled); a
 
 - **Cost.** Cycle length in years is an input (`cycle_years`, `genomic_cycle_years`), but the cost per cycle is not modelled.
 - **Breeding-program structure.** There is no selfing, doubled haploids, hybrids or trial stages, no sexes and no overlapping generations.
-- **Genotype × environment interaction.** Climate stress is a uniform penalty on the trait mean.
+- **Trial structure.** Climate stress is modelled as G×E between two genetically correlated environments (normal and stress season), not as location × year trials. Multi-trait runs still use a uniform climate penalty.
 - **Prediction.** The genomic-selection strategy uses a mock predictor with a configurable accuracy. Uploaded phenotypes do feed the engine: SNP-BLUP estimates the marker effects, see below. Uploaded pedigrees and edit tables are parsed but not used.
 
 ## CRISPR positioning

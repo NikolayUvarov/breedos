@@ -204,9 +204,12 @@ func TestRunSimulation_ClimatePenaltyDropsRecordedGain(t *testing.T) {
 		t.Fatalf("baseline gain not positive: %v", gainBase)
 	}
 	ratio := gainClimate / gainBase
-	// Expected ratio ≈ 0.54 (1 - 0.46). Allow ±0.05 for rounding / stochastic noise.
-	if ratio < 0.49 || ratio > 0.59 {
-		t.Errorf("climate-adjusted gain ratio = %.3f, expected ≈ 0.54", ratio)
+	// v0.8.7 — Issue 38. Climate is G×E, not a uniform ×0.54: the target
+	// value is 0.5·normal + 0.5·(1 − 0.46)·stress with rg = 0.5 between
+	// them, so nursery selection keeps ≈ 0.5 + 0.5·0.54·0.5 ≈ 0.64 of the
+	// normal-season gain.
+	if ratio < 0.55 || ratio > 0.75 {
+		t.Errorf("target-season gain ratio = %.3f, expected ≈ 0.64 under G×E", ratio)
 	}
 }
 
