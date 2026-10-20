@@ -436,7 +436,14 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 	if err := validateMultiTraitRequest(req); err != nil {
 		return SimResponse{}, err
 	}
-	strategies := buildStrategyConfigs(req)
+	// OCS (Issue 36) needs per-candidate coancestry and single-trait
+	// scores; the multi-trait path does not run it.
+	strategies := make([]strategyConfig, 0)
+	for _, cfg := range buildStrategyConfigs(req) {
+		if cfg.Rule != "ocs_target" {
+			strategies = append(strategies, cfg)
+		}
+	}
 	if err := validateRequest(req, len(strategies)); err != nil {
 		return SimResponse{}, err
 	}

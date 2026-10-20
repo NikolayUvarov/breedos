@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.5] - 2026-10-20
+
+### Added — optimum contribution selection with a ΔF target (Issue 36)
+
+The "decision engine" used to choose among hand-tuned presets; the
+"OCS-like" strategy was a greedy similarity penalty with equal
+contributions. The new strategy `ocs` (advanced set, single-trait) is real
+optimum contribution selection.
+
+- Each generation it takes the top 200 candidates by phenotype and builds
+  their coancestry matrix F from identity by descent (founder-haplotype
+  labels, 128 tracker loci).
+- It then solves for contributions c ≥ 0, Σc = 1, maximising c'g subject
+  to c'Fc = θ + ΔF·(1 − θ). This is the closed-form Lagrangian of
+  Meuwissen (1997); negative contributions are dropped and the system
+  re-solved.
+- Contributions become **exact gamete counts** (largest remainder, self-pairs
+  broken). Family-size sampling does not add drift on top of the target.
+- New request field `target_delta_f` (default 0.01 = FAO's ΔF ≤ 1 %,
+  Ne ≥ 50). New sensitivity axis `target_delta_f`.
+- Demo: "OCS target ΔF, %" input, and the strategy "OCS (ΔF target)".
+
+**What it does well — control.** Realised ΔF tracks the target closely
+(N=200, 20 generations, 6 replicates):
+
+| target | 0.5% | 1.0% | 1.5% | 2.0% | 3.0% | 4.0% |
+|---|---:|---:|---:|---:|---:|---:|
+| realised | 0.45% | 1.02% | 1.67% | 2.21% | 3.41% | 4.22% |
+
+**What it does not do here — beat truncation on gain.** At equal ΔF its
+gain is comparable to phenotype truncation tuned to the same ΔF: 7.21 vs
+7.16 σA at ≈1%. Above ~1.5% it falls slightly behind, because a myopic
+optimum concentrates contributions on very few parents. This matches the
+literature: OCS's advantage at equal ΔF comes from EBVs that carry family
+information, where truncation co-selects relatives. Under individual mass
+selection there is little to recover. The strategy's recommendation text
+says so.
+
+### Also
+
+- The sensitivity dropdown now lists `genomic_cycle_years` (added
+  server-side in v0.8.4, missing from the UI) and `target_delta_f`.
+- Effective parents are counted as distinct parents, so they stay correct
+  for gamete lists.
+
+### Tests
+
+`ocs_test.go`:
+- on unrelated founders Σc² = 2ΔF, contributions are non-negative and
+  monotone in g;
+- exact gamete allocation with no self-pairs;
+- realised ΔF within ±30 % of 0.5/1/2 % targets;
+- OCS gain ≥ 90 % of truncation at a similar ΔF.
+
 ## [0.8.4] - 2026-10-20
 
 ### Added — time axis: years per cycle, gain per year (Issue 35)

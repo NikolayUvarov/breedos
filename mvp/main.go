@@ -115,6 +115,10 @@ type SimRequest struct {
 	// many of its own cycles as fit into it.
 	CycleYears        float64 `json:"cycle_years,omitempty"`
 	GenomicCycleYears float64 `json:"genomic_cycle_years,omitempty"`
+	// v0.8.5 — Issue 36. Target rate of inbreeding per generation for the
+	// optimum-contribution strategy (ocs.go). 0 → 0.01 (FAO: ΔF ≤ 1 %,
+	// Ne ≥ 50).
+	TargetDeltaF float64 `json:"target_delta_f,omitempty"`
 }
 
 // v0.7.21 — Issue 18. Single trait's architecture within a multi-trait run.
@@ -940,6 +944,9 @@ func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datase
 		}
 		notes = append(notes, fmt.Sprintf("Genomic selection mock: prediction accuracy %.2f at generation 0 (%s), decaying as genetic variance erodes. Its real-world edge — a shorter breeding cycle — needs a time axis this version does not model yet.", acc, accSrc))
 	}
+	if req.StrategySet == "advanced" && len(req.Traits) == 0 {
+		notes = append(notes, fmt.Sprintf("Optimum contribution selection: target ΔF %.2f%% per generation (Ne ≈ %.0f). Contributions maximise c'g subject to c'Fc = θ + ΔF(1 − θ), with F the IBD coancestry among the top %d candidates by phenotype (Meuwissen 1997); realised ΔF is in the results.", 100*req.TargetDeltaF, 1/(2*req.TargetDeltaF), ocsMaxCandidates))
+	}
 	if req.Upload != "" {
 		notes = append(notes, fmt.Sprintf("Founder population came from upload %s (ephemeral, in-memory; not persisted). EARLY IMPORT path — not production integration. Phenotype, pedigree, and candidate-edit tables, if uploaded, are surfaced in the upload summary but NOT consumed by this run.", req.Upload))
 	}
@@ -1007,6 +1014,7 @@ func buildStrategyConfigs(req SimRequest) []strategyConfig {
 		strategyConfig{Name: "Random parent baseline", Code: "random", Summary: "Randomly selects the configured parent fraction. Useful to separate selection value from drift noise.", Rule: "random", MatingRule: "random", ParentMultiplier: 1.0},
 		strategyConfig{Name: "Phenotype truncation selection", Code: "phenotype", Summary: "Classic truncation selection on noisy phenotype. Strong baseline for practical breeding programs.", Rule: "phenotype", MatingRule: "random", TraitWeight: 1.0, ParentMultiplier: 1.0},
 		strategyConfig{Name: "Genomic selection mock", Code: "genomic", Summary: "Selects by a simplified predicted breeding value. In production this is where GBLUP/Bayesian/ML models plug in.", Rule: "genomic", MatingRule: "random", TraitWeight: 1.0, ParentMultiplier: 1.0},
+		strategyConfig{Name: "Optimum contribution selection (ΔF target)", Code: "ocs", Summary: "Chooses unequal parent contributions that maximise expected gain while holding the rate of inbreeding at target_delta_f per generation (Meuwissen 1997, coancestry from identity by descent).", Rule: "ocs_target", MatingRule: "allocated", TraitWeight: 1.0, ParentMultiplier: 1.0},
 		strategyConfig{Name: "OCS-like constrained selection", Code: "ocs_like", Summary: "Approximates optimum contribution selection: gain is pursued under a similarity/diversity penalty.", Rule: "ocs", MatingRule: "random", TraitWeight: 0.90, NoveltyWeight: 0.25, SimilarityPenalty: 0.85, ParentMultiplier: 1.80},
 		strategyConfig{Name: "Cross planner", Code: "cross_planner", Summary: "Not only who to keep, but who to cross. Uses balanced parent choice plus more distant mating pairs.", Rule: "score", MatingRule: "diverse_pairs", TraitWeight: 0.82, NoveltyWeight: 0.60, ParentMultiplier: 1.80},
 	)
@@ -1946,6 +1954,9 @@ func normalizeRequest(req *SimRequest) {
 	if req.ChromosomeLengthM == 0 {
 		req.ChromosomeLengthM = defaultChromosomeLengthM
 	}
+	if req.TargetDeltaF == 0 {
+		req.TargetDeltaF = defaultTargetDeltaF
+	}
 }
 func validateRequest(req SimRequest, strategyCount int) error {
 	if req.PopulationSize < 2 || req.PopulationSize > 5000 {
@@ -1981,6 +1992,9 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	}
 	if req.CycleYears < 0 || req.CycleYears > 30 || req.GenomicCycleYears < 0 || req.GenomicCycleYears > 30 {
 		return errors.New("cycle_years and genomic_cycle_years must be between 0 and 30 years (0 = no time axis / same as cycle_years)")
+	}
+	if req.TargetDeltaF < 0 || req.TargetDeltaF > 0.2 {
+		return errors.New("target_delta_f must be in (0, 0.2] (rate of inbreeding per generation, e.g. 0.01 for 1%); 0 or omitted means 0.01")
 	}
 	if req.GenomicCycleYears > 0 && req.CycleYears <= 0 {
 		return errors.New("genomic_cycle_years needs cycle_years: set the phenotypic cycle length first")
@@ -2169,7 +2183,7 @@ func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents := selectParents(pop, effects, req, cfg, model, rng, gen)
 		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
-		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, len(parents))
+		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents))
 		m.Year = round4(float64(gen) * cycle)
 		metrics = append(metrics, m)
 		if progress != nil {
@@ -2299,6 +2313,15 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 	if cfg.Rule == "ocs" {
 		return selectOCSLike(pop, scored, parentCount, cfg.SimilarityPenalty)
 	}
+	// v0.8.5 — Issue 36. Returns a gamete list (2 per offspring), consumed
+	// by the "allocated" mating rule.
+	if cfg.Rule == "ocs_target" {
+		target := req.TargetDeltaF
+		if target <= 0 {
+			target = defaultTargetDeltaF
+		}
+		return selectOCSTarget(pop, scored, target, rng)
+	}
 	parents := make([]int, parentCount)
 	for i := 0; i < parentCount; i++ {
 		parents[i] = scored[i].idx
@@ -2374,9 +2397,17 @@ func makeNextGeneration(pop []organism, parents []int, gm *genomeMap, mutationRa
 	n := len(pop)
 	next := make([]organism, n)
 	xo := make([]float64, 0, 16)
+	// v0.8.5 — Issue 36. "allocated": parents is an exact gamete list,
+	// offspring i gets gametes 2i and 2i+1 (OCS contributions).
+	allocated := matingRule == "allocated" && len(parents) == 2*n
 	for i := 0; i < n; i++ {
-		p1 := parents[rng.Intn(len(parents))]
-		p2 := chooseSecondParent(pop, parents, p1, rng, matingRule)
+		var p1, p2 int
+		if allocated {
+			p1, p2 = parents[2*i], parents[2*i+1]
+		} else {
+			p1 = parents[rng.Intn(len(parents))]
+			p2 = chooseSecondParent(pop, parents, p1, rng, matingRule)
+		}
 		child := gm.newOrganism()
 		gm.transmit(&pop[p1], &child, 0, mutationRate, rng, xo)
 		gm.transmit(&pop[p2], &child, 1, mutationRate, rng, xo)
@@ -2657,6 +2688,8 @@ func recommendationFor(code string, f FinalStats) string {
 		return "Good practical baseline; compare against genomic and OCS-like strategies under noise." + riskText
 	case "genomic":
 		return "Promising when marker/phenotype data support prediction; replace mock predictor with real GEBV models." + riskText
+	case "ocs":
+		return "Use to hold inbreeding at a chosen rate: it maximises expected gain per generation at exactly target_delta_f (1% ≈ Ne 50). Under mass selection on phenotype its gain at equal ΔF is comparable to truncation; the advantage grows with EBVs that carry family information." + riskText
 	case "ocs_like":
 		return "Strong early BreedOS candidate: gain is pursued under explicit diversity pressure." + riskText
 	case "cross_planner":

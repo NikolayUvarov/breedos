@@ -132,6 +132,8 @@ var validSensitivityAxes = map[string]func(*SimRequest, float64){
 	"generations":       func(r *SimRequest, v float64) { r.Generations = int(v + 0.5) },
 	// v0.8.4 — Issue 35. "Does the GS recommendation survive a slower genomic cycle?"
 	"genomic_cycle_years": func(r *SimRequest, v float64) { r.GenomicCycleYears = v },
+	// v0.8.5 — Issue 36. "How much gain does each extra 0.5% of ΔF buy?"
+	"target_delta_f": func(r *SimRequest, v float64) { r.TargetDeltaF = v },
 }
 
 const traitWeightAxisPrefix = "trait_weight:"

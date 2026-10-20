@@ -7,6 +7,7 @@ const colors = {
   diversity: '#8cb7ff',
   balanced: '#8fffd1',
   balanced_crispr: '#ffd38c',
+  ocs: '#f2f2a0',
   ocs_like: '#c2ff8c',
   cross_planner: '#ffdf70',
   edit_introgression: '#ffb070'
@@ -21,6 +22,7 @@ const labels = {
   diversity: 'Diversity-preserving',
   balanced: 'Balanced',
   balanced_crispr: 'Balanced + CRISPR',
+  ocs: 'OCS (ΔF target)',
   ocs_like: 'OCS-like',
   cross_planner: 'Cross planner',
   edit_introgression: 'Edit introgression'
@@ -95,6 +97,7 @@ function requestFromForm() {
     worker_count: Math.trunc(numberValue('worker_count')),
     inbreeding_limit: numberValue('inbreeding_limit'),
     diversity_loss_limit: numberValue('diversity_loss_limit'),
+    target_delta_f: numberValue('target_delta_f') / 100,
     max_inbreeding: numberValue('max_inbreeding'),
     max_diversity_loss: numberValue('max_diversity_loss'),
     max_rare_useful_loss: Math.trunc(numberValue('max_rare_useful_loss')),
@@ -230,6 +233,8 @@ function setFormValues(values) {
     const el = byId(id);
     if (!el) continue;
     if (el.type === 'checkbox') el.checked = Boolean(value);
+    // v0.8.5: the request carries ΔF as a fraction; the field is in percent.
+    else if (id === 'target_delta_f') el.value = String(Math.round(Number(value) * 1e6) / 1e4);
     else el.value = String(value);
     // v0.8.0: presets now carry a dataset; let the selector's handler
     // hide the upload panel when a preset switches away from uploads.
@@ -1469,6 +1474,7 @@ function requestSignature(req) {
     worker_count: Number(req.worker_count) || 0,
     inbreeding_limit: Number(req.inbreeding_limit) || 0,
     diversity_loss_limit: Number(req.diversity_loss_limit) || 0,
+    target_delta_f: Number(req.target_delta_f) || 0,
     max_inbreeding: Number(req.max_inbreeding) || 0,
     max_diversity_loss: Number(req.max_diversity_loss) || 0,
     max_rare_useful_loss: Number(req.max_rare_useful_loss) || 0,
@@ -1499,6 +1505,7 @@ function changedParams(prevReq, curReq) {
     ['replicates', 'replicates'],
     ['worker_count', 'worker count'],
     ['inbreeding_limit', 'inbreeding limit'],
+    ['target_delta_f', 'OCS target ΔF'],
     ['diversity_loss_limit', 'diversity loss limit'],
     ['max_inbreeding', 'max inbreeding'],
     ['max_diversity_loss', 'max diversity loss'],
@@ -1530,7 +1537,9 @@ function expectedMutationFlips(req) {
 // Mirrors buildStrategyConfigs() in main.go. Keep in sync if strategies change.
 function strategyCountForRequest(req) {
   const advanced = String(req.strategy_set || 'core') === 'advanced';
-  const base = advanced ? 9 : 4;
+  // v0.8.5: advanced adds OCS with a ΔF target (single-trait only).
+  const multi = !!(multiTraitState.traits && multiTraitState.traits.length);
+  const base = advanced ? (multi ? 9 : 10) : 4;
   const crisprActive = Boolean(req.crispr_enabled) && (Number(req.crispr_edits) || 0) > 0;
   if (!crisprActive) return base;
   return base + (advanced ? 2 : 1);
@@ -1684,7 +1693,9 @@ function escapeHtml(s) {
 const SENS_DEFAULT_VALUES = {
   heritability:      '0.2, 0.35, 0.5, 0.65, 0.8',
   selection_percent: '5, 10, 15, 20, 30',
-  generations:       '10, 20, 30, 50, 80'
+  generations:       '10, 20, 30, 50, 80',
+  genomic_cycle_years: '1, 1.5, 2, 3, 4',
+  target_delta_f:    '0.005, 0.01, 0.015, 0.02, 0.03'
 };
 // v0.7.23 — Issue B. Default value sets for the dynamic trait_weight
 // axes. The picker auto-fills these when the operator switches the axis.
@@ -1692,12 +1703,16 @@ const SENS_TRAIT_WEIGHT_DEFAULTS = '-1.0, -0.5, 0.0, 0.5, 1.0';
 const SENS_AXIS_LABEL = {
   heritability:      'h²',
   selection_percent: 'sel %',
-  generations:       'gens'
+  generations:       'gens',
+  genomic_cycle_years: 'GS cycle',
+  target_delta_f:    'OCS ΔF'
 };
 const SENS_AXIS_FORMAT = {
   heritability:      v => v.toFixed(2),
   selection_percent: v => v.toFixed(0) + '%',
-  generations:       v => String(Math.round(v))
+  generations:       v => String(Math.round(v)),
+  genomic_cycle_years: v => v + ' yr',
+  target_delta_f:    v => (100 * v).toFixed(1) + '%'
 };
 let sensRunInFlight = false;
 
@@ -1713,6 +1728,10 @@ function refreshSensAxisOptions() {
     {key: 'heritability',      label: 'Heritability (h²)'},
     {key: 'selection_percent', label: 'Selection intensity (%)'},
     {key: 'generations',       label: 'Generations horizon'},
+    // v0.8.4/0.8.5 — Issues 35/36. GS cycle needs the time axis; OCS ΔF
+    // needs the advanced strategy set.
+    {key: 'genomic_cycle_years', label: 'Genomic cycle, years (time axis)'},
+    {key: 'target_delta_f',    label: 'OCS target ΔF per generation'},
     // v0.7.31 — Issue 29. Structured climate-scenario axis.
     {key: 'climate_scenario',  label: 'Climate scenario (mode × severity)'}
   ];

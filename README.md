@@ -29,6 +29,7 @@ BreedOS runs Monte Carlo simulations of a breeding population under competing se
 
 - **Neutral drift** and **random parents**: baselines. They are shown for comparison and never recommended.
 - **Aggressive / phenotype truncation**: maximum short-term gain.
+- **Optimum contribution selection (ΔF target)**: unequal parent contributions that maximise expected gain while holding the rate of inbreeding at `target_delta_f` per generation (default 1% ≈ Ne 50). It follows Meuwissen (1997), with coancestry from identity by descent. Contributions become exact gamete counts.
 - **Diversity-preserving**, **balanced**, **OCS-like** (gain under a similarity penalty), **cross planner** (distant mating pairs).
 - **Genomic selection mock**: prediction with a configurable accuracy (`genomic_accuracy`, default √h²) that decays as VG erodes. A placeholder for GBLUP / Bayesian / ML predictors.
 - **Imported GEBV**: generation-0 parents ranked by breeding values from your own rrBLUP / BGLR / sommer / AlphaSimR pipeline.
@@ -145,7 +146,8 @@ Minimal request (omitted fields take defaults):
 
 `selection_percent` is a percent on a 0–100 scale (`20` = 20%). Values below 1 are rejected. Optional fields:
 - genome: `chromosomes` (default 10), `chromosome_length_morgans` (default 1.0), `genomic_accuracy` (default √h²);
-- time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`). Request and response shapes live in the handler types at the top of `mvp/main.go`.
+- time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`).
+- OCS: `target_delta_f` (default 0.01). Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
 Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages. Marker positions are read from a `# Sites (chrom:pos), ...` comment line followed by `# chrom:pos, chrom:pos, ...`, or from `chrom:pos` header labels. Markers must be ordered by chromosome and position.
 

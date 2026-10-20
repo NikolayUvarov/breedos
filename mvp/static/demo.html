@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.4 — linked genome · IBD inbreeding · calendar time · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.5 — linked genome · IBD inbreeding · calendar time · OCS · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -242,6 +242,14 @@
               <span>0 = auto</span>
             </label>
             <input id="worker_count" type="number" min="0" max="64" value="0">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>OCS target ΔF, % <span class="tip" tabindex="0" data-tip="Rate of inbreeding per generation that the optimum-contribution strategy (advanced set) holds. 1% ≈ Ne 50, the FAO short-term guideline. The strategy picks unequal parent contributions that maximise expected gain at exactly this rate.">?</span></span>
+              <span>per generation</span>
+            </label>
+            <input id="target_delta_f" type="number" min="0.1" max="20" step="0.1" value="1">
           </div>
 
           <div class="field">
