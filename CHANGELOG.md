@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-20
+
+### Changed — typography and wording
+
+- **Lighter headings site-wide.** `h1` / `h2` are now weight 600 (they used
+  the browser default 700), `h3` is 650, and letter-spacing is loosened
+  (h1 −0.075em → −0.05em, h2 −0.06em → −0.04em) so the large headings no
+  longer look cramped.
+- `/ru`:
+  - «σA основателей» now reads «в долях σA исходной популяции», the usual
+    Russian breeding term;
+  - IBD inbreeding is described as relative to «исходной популяции»;
+  - «Что внутри» no longer carries a hard-coded release number, which had
+    gone stale at v0.8.0.
+- README and the review packet no longer pin the model description to
+  v0.8.0.
+
 ## [0.8.2] - 2026-10-20
 
 ### Added — "Какие данные нужны" on the Russian landing

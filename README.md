@@ -16,7 +16,7 @@ BreedOS makes these dynamics visible and comparable across strategies.
 
 BreedOS runs Monte Carlo simulations of a breeding population under competing selection strategies and compares where each one leaves the population after 10–40+ generations: genetic gain, inbreeding, effective population size, diversity, fixation, and rare favourable alleles lost.
 
-### Genetic model (v0.8.0)
+### Genetic model
 
 - **Linked genome.** Markers sit on chromosomes with a genetic map in Morgans. Each meiosis draws Poisson crossovers per chromosome (Haldane map, no interference), and individuals carry phased haplotypes, so linkage disequilibrium, hitchhiking and linkage drag emerge from the model. The synthetic map defaults to 10 chromosomes × 1 M. Datasets that carry marker positions use their real chromosomes.
 - **Inbreeding by descent.** Every founder haplotype is labelled at up to 512 tracker loci. F is the probability that two allele copies in the population are identical by descent (IBD) relative to the founders, so selecting on observed marker state cannot lower it. Diversity (expected heterozygosity) is reported separately.
@@ -59,7 +59,7 @@ BreedOS is a **decision layer** for CRISPR-enabled breeding: which candidate edi
 
 ## Status
 
-Early prototype (v0.8.0). Working simulation engine with a linked genome and IBD inbreeding, interactive demo UI, programmatic JSON API. Active development. Feedback from breeders, computational biologists, and CRISPR researchers is genuinely welcome — open an issue.
+Early prototype. Working simulation engine with a linked genome and IBD inbreeding, interactive demo UI, programmatic JSON API. Active development. Feedback from breeders, computational biologists, and CRISPR researchers is genuinely welcome — open an issue.
 
 ## Quickstart
 

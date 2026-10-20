@@ -8,7 +8,7 @@
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
   <style>
-    .hero-ru h1 { font-size: clamp(34px, 5.2vw, 60px); line-height: 1.02; letter-spacing: -0.05em; }
+    .hero-ru h1 { font-size: clamp(34px, 5.2vw, 60px); line-height: 1.04; letter-spacing: -0.035em; }
     .hero-ru .lede { font-size: clamp(17px, 1.8vw, 21px); }
     .hook-card { padding: 18px 18px 14px; min-width: 0; }
     .hook-card .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
@@ -86,7 +86,7 @@
 
         <figure class="card hook-card" style="margin:0">
           <div class="chart-head">
-            <strong>Генетический прогресс, σA основателей</strong>
+            <strong>Генетический прогресс, в долях σA исходной популяции</strong>
             <div class="hook-legend" aria-hidden="true">
               <span><i style="background:var(--warn)"></i>агрессивный отбор</span>
               <span><i style="background:var(--accent)"></i>сбалансированная стратегия</span>
@@ -131,15 +131,15 @@
     </section>
 
     <section id="inside" class="section wrap">
-      <h2>Что внутри (v0.8.0)</h2>
+      <h2>Что внутри</h2>
       <div class="inside-grid">
         <div class="card mini">
           <h3>Генетическая модель</h3>
           <ul class="clean">
             <li>Хромосомы и генетическая карта, кроссинговер по Haldane, фазированные гаплотипы.</li>
-            <li>Инбридинг F — по идентичности по происхождению (IBD) относительно основателей, а не по гетерозиготности маркеров.</li>
+            <li>Инбридинг F — по идентичности по происхождению (IBD) относительно исходной популяции, а не по гетерозиготности маркеров.</li>
             <li>Средовая дисперсия фиксирована с поколения 0: наследуемость падает по мере истощения VG.</li>
-            <li>Прогресс — в единицах σA основателей; ΔF и Ne на каждое поколение.</li>
+            <li>Прогресс — в долях σA исходной популяции; ΔF и Ne на каждое поколение.</li>
           </ul>
         </div>
         <div class="card mini">
@@ -175,7 +175,7 @@ line_003,1,0,0,2,…</code></pre>
           <table class="data-table">
             <thead><tr><th>Файл</th><th>Колонки</th><th>Что делает движок</th></tr></thead>
             <tbody>
-              <tr><td><a href="/upload-fixture/genotype.csv">genotype.csv</a></td><td><code>id, маркеры…</code></td><td class="used">основатели популяции</td></tr>
+              <tr><td><a href="/upload-fixture/genotype.csv">genotype.csv</a></td><td><code>id, маркеры…</code></td><td class="used">исходная популяция (поколение 0)</td></tr>
               <tr><td><a href="/upload-fixture/predictions.csv">predictions.csv</a></td><td><code>id, gebv, uncertainty</code></td><td class="used">ваши GEBV (rrBLUP / BGLR / sommer) — отбор родителей поколения 0</td></tr>
               <tr><td><a href="/upload-fixture/phenotype.csv">phenotype.csv</a></td><td><code>id, trait_value</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
               <tr><td><a href="/upload-fixture/pedigree.csv">pedigree.csv</a></td><td><code>id, sire, dam</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
@@ -219,7 +219,7 @@ line_003,1,0,0,2,…</code></pre>
   </main>
 
   <footer class="footer">
-    <div class="wrap">BreedOS MVP v0.8.2 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
+    <div class="wrap">BreedOS MVP v0.8.3 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
   </footer>
 
   <!-- Chart data: BreedOS v0.8.0 engine output (POST /api/simulate, core strategy set,
@@ -301,7 +301,7 @@ line_003,1,0,0,2,…</code></pre>
     }
     document.getElementById('hook-caption').textContent = caption;
     document.getElementById('hook-params').textContent = 'Модель BreedOS, ' + d.params +
-      '. Прогресс — в σA основателей; F — по идентичности по происхождению. Повторите в демо.';
+      '. Прогресс — в долях σA исходной популяции; F — по идентичности по происхождению. Повторите в демо.';
     svg.setAttribute('aria-label', caption);
   })();
   </script>
