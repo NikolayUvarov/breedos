@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-20
+
+### Added — "Какие данные нужны" on the Russian landing
+
+`/ru` now shows the input format before anyone opens the demo:
+- the genotype CSV layout (0/1/2 dosages; `chrom:pos` headers give a real
+  genetic map, `m1, m2, …` a synthetic one);
+- size and retention limits;
+- a table of the five optional files, links to the example fixtures, and
+  an honest *used by the engine* / *shown only* column (only genotype
+  and predictions feed the simulation).
+
+The nav link «Данные» points to this section, which links on to
+`/datasets`. On phones the table drops to two columns with no horizontal
+overflow. No engine change.
+
 ## [0.8.1] - 2026-10-20
 
 ### Fixed — TLS certificate renewal through the reverse proxy

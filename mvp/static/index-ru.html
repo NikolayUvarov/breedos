@@ -32,7 +32,22 @@
     .section.tight { padding: 40px 0; }
     .feedback h2 { margin-bottom: 10px; }
     .author { font-size: 14.5px; margin: 18px 0 0; }
-    @media (max-width: 980px) { .inside-grid { grid-template-columns: 1fr; } }
+    .data-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+    .data-grid pre { margin: 10px 0 0; padding: 12px 14px; overflow-x: auto; border-radius: 10px; background: rgba(0,0,0,0.35); border: 1px solid var(--line); font-size: 13.5px; line-height: 1.55; }
+    .data-grid ul.clean { margin: 10px 0 0; }
+    .data-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    .data-table th, .data-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+    .data-table th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+    .data-table code { font-size: 12.5px; }
+    .data-table .used { color: var(--accent); font-weight: 700; }
+    .data-table .shown { color: var(--muted); }
+    .data-grid .try { font-size: 13.5px; color: var(--muted); margin: 12px 0 0; }
+    .data-grid > * { min-width: 0; }
+    .data-table th, .data-table td { overflow-wrap: anywhere; }
+    .data-table a { color: var(--accent); }
+    .data-table td:first-child { white-space: nowrap; overflow-wrap: normal; }
+    @media (max-width: 980px) { .inside-grid, .data-grid { grid-template-columns: minmax(0, 1fr); } }
+    @media (max-width: 560px) { .data-table th:nth-child(2), .data-table td:nth-child(2) { display: none; } }
   </style>
 </head>
 <body>
@@ -42,7 +57,7 @@
       <a href="#who">Кому</a>
       <a href="#inside">Модель</a>
       <a href="#limits">Ограничения</a>
-      <a href="/datasets">Данные</a>
+      <a href="#data">Данные</a>
       <a href="/demo">Демо</a>
       <span class="lang-switcher" aria-label="Язык">
         <a href="/">EN</a> ·
@@ -139,6 +154,39 @@
       </div>
     </section>
 
+    <section id="data" class="section wrap">
+      <h2>Какие данные нужны</h2>
+      <div class="data-grid">
+        <div class="card mini">
+          <h3>Минимум — одна таблица генотипов</h3>
+          <p>Строка — особь или линия, колонка — SNP, значение — число копий аллеля: 0, 1 или 2 (как <code>0/0</code>, <code>0/1</code>, <code>1/1</code> в VCF).</p>
+<pre><code>id,1A:1204533,1A:2311870,1A:5120044,2B:880121,…
+line_001,0,2,1,2,…
+line_002,2,2,0,1,…
+line_003,1,0,0,2,…</code></pre>
+          <ul class="clean">
+            <li>Заголовок <code>хромосома:позиция</code> — BreedOS строит генетическую карту по вашим хромосомам. Без позиций (<code>m1, m2, …</code>) карта синтетическая.</li>
+            <li>Маркеры — по порядку хромосом и позиций.</li>
+            <li>До 16 МБ на файл. Данные живут в памяти сервера 1 час и никуда не сохраняются.</li>
+          </ul>
+        </div>
+        <div class="card mini">
+          <h3>Что ещё можно приложить</h3>
+          <table class="data-table">
+            <thead><tr><th>Файл</th><th>Колонки</th><th>Что делает движок</th></tr></thead>
+            <tbody>
+              <tr><td><a href="/upload-fixture/genotype.csv">genotype.csv</a></td><td><code>id, маркеры…</code></td><td class="used">основатели популяции</td></tr>
+              <tr><td><a href="/upload-fixture/predictions.csv">predictions.csv</a></td><td><code>id, gebv, uncertainty</code></td><td class="used">ваши GEBV (rrBLUP / BGLR / sommer) — отбор родителей поколения 0</td></tr>
+              <tr><td><a href="/upload-fixture/phenotype.csv">phenotype.csv</a></td><td><code>id, trait_value</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
+              <tr><td><a href="/upload-fixture/pedigree.csv">pedigree.csv</a></td><td><code>id, sire, dam</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
+              <tr><td><a href="/upload-fixture/edits.csv">edits.csv</a></td><td><code>marker_id, target_allele, expected_effect</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
+            </tbody>
+          </table>
+          <p class="try">Имена файлов — ссылки на учебные примеры. В демо: Founder population → «Uploaded CSVs». Нет своих данных — <a href="/datasets">публичные наборы</a>.</p>
+        </div>
+      </div>
+    </section>
+
     <section id="limits" class="section wrap limits">
       <div class="card">
         <h2>Чего BreedOS пока не делает</h2>
@@ -171,7 +219,7 @@
   </main>
 
   <footer class="footer">
-    <div class="wrap">BreedOS MVP v0.8.1 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
+    <div class="wrap">BreedOS MVP v0.8.2 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
   </footer>
 
   <!-- Chart data: BreedOS v0.8.0 engine output (POST /api/simulate, core strategy set,
