@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-10-20
+
+### Fixed — readable upload errors on production
+
+The production proxy replaces every 400 body with
+`400 Bad Request [127.0.0.1:8080 ]`, so upload format errors reached the
+user without their reason.
+
+- The demo now pre-flights polyploid SSR cells (three or more alleles) and
+  names the offending cell, e.g. a tetraploid potato profile.
+- Any other proxy-masked 400 on upload is replaced by a summary of the
+  accepted genotype and phenotype formats.
+
 ## [0.8.9] - 2026-10-20
 
 ### Added — multi-allelic markers (SSR / microsatellites)

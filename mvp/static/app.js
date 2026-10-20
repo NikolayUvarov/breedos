@@ -2123,6 +2123,18 @@ function setupUploadUI() {
       if (el && el.files && el.files[0]) fd.append(field, el.files[0]);
     }
     const status = byId('uploadStatus');
+    // v0.8.9. Polyploid SSR profiles (3+ alleles in a cell) are rejected
+    // by the server; say why here, because the proxy hides 400 bodies.
+    const genoText = await genoEl.files[0].text();
+    const polyCell = genoText.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).slice(1, 400)
+      .flatMap(l => l.split(/[,;\t]/).slice(1)).find(c => (c.match(/[\/|]/g) || []).length >= 2);
+    if (polyCell) {
+      if (status) {
+        status.textContent = `upload failed: the cell "${polyCell.trim()}" has three or more alleles. BreedOS models diploid inheritance, so polyploid SSR profiles with unknown dosage (e.g. tetraploid potato) are not supported yet.`;
+        status.style.color = 'var(--danger)';
+      }
+      return;
+    }
     // v0.8.6 — Issue 37. Mirror the server's phenotype-id check: the
     // production proxy replaces 400 bodies, so the reason would be lost.
     const phenoEl = byId('uploadPhenotype');
@@ -2145,6 +2157,11 @@ function setupUploadUI() {
       const res = await fetch('/api/upload', {method: 'POST', body: fd});
       if (!res.ok) {
         const text = await res.text();
+        // The production proxy replaces 400 bodies with its own line;
+        // replace that with what the server checks.
+        if (/^400 Bad Request \[/.test(text.trim())) {
+          throw new Error('the server could not read one of the files. Genotype: SNP dosages 0/1/2, or SSR allele sizes (152/158 per cell, two columns per locus, or GenAlEx), comma / semicolon / tab separated, one id column first; diploid only. Phenotype: id,value with ids matching the genotype. Files up to 16 MB.');
+        }
         throw new Error(text || ('HTTP ' + res.status));
       }
       const data = await res.json();
