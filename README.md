@@ -24,6 +24,10 @@ BreedOS runs Monte Carlo simulations of a breeding population under competing se
 - **Interpretable units.** Gain is reported in trait units and in founder-σA units. ΔF per generation and Ne = 1/(2ΔF) are reported for every strategy.
 - **Calendar time (optional).** With `cycle_years` set, every strategy runs as many of its own cycles as fit into the same horizon. Genomic strategies can cycle faster (`genomic_cycle_years`). Results add gain per year and ΔF per year, and the charts switch to a year axis.
 - Additive QTL effects; optional multi-trait selection indices with genetic correlations.
+- **Line breeding** (`mating_system: ssd | dh`, `ssd_generations`) for self-pollinating crops.
+  - Selected lines are crossed in pairs; each F1 becomes an inbred line by single-seed descent or one doubled-haploid step.
+  - Synthetic founders are converted to homozygous lines; real inbred accessions are kept.
+  - Inbreeding is coancestry among lines.
 - **Climate as G×E.** With `climate: {mode, severity, frequency, rg}`, normal- and stress-season performance are two genetically correlated traits:
   - a fraction rg of the QTL is shared;
   - the rest act only in normal seasons (yield potential) or only under stress;
@@ -54,7 +58,7 @@ Core mode runs a four-strategy subset (plus the CRISPR strategy when enabled); a
 ### What it does not model yet
 
 - **Cost.** Cycle length in years is an input (`cycle_years`, `genomic_cycle_years`), but the cost per cycle is not modelled.
-- **Breeding-program structure.** There is no selfing, doubled haploids, hybrids or trial stages, no sexes and no overlapping generations.
+- **Breeding-program structure.** Outcrossing and line breeding (SSD / DH) are modelled. Hybrids and heterosis, multi-stage trials, sexes and overlapping generations are not.
 - **Trial structure.** Climate stress is modelled as G×E between two genetically correlated environments (normal and stress season), not as location × year trials. Multi-trait runs still use a uniform climate penalty.
 - **Prediction.** The genomic-selection strategy uses a mock predictor with a configurable accuracy. Uploaded phenotypes do feed the engine: SNP-BLUP estimates the marker effects, see below. Uploaded pedigrees and edit tables are parsed but not used.
 

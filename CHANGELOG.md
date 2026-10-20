@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.8] - 2026-10-20
+
+### Added — line breeding for self-pollinating crops (Issue 39)
+
+Wheat, rice, barley and soybean, the core of the climate-resilient
+beachhead, are bred as crosses between inbred lines followed by
+single-seed descent or doubled haploids. The engine only modelled one
+random-mating outcrossing population.
+
+- New request fields:
+  - `mating_system`: `random` (default) | `ssd` | `dh`;
+  - `ssd_generations` (default 4 = F5 lines).
+- Each cycle, selected lines are crossed in pairs (all mating rules and
+  OCS gamete lists apply). Each F1 then becomes an inbred line:
+  - SSD: k rounds of selfing, each a full meiosis with recombination;
+  - DH: one gamete, doubled, carrying identical IBD labels on both strands.
+- **Founders.** Synthetic founders with heterozygosity above 5 % are
+  converted to homozygous lines. Real inbred accessions (Arabidopsis 1001,
+  wheat panels) are kept as they are.
+- **Inbreeding.** F is coancestry among lines
+  (`ibdCoancestryPairs(…, betweenOnly)`). Within-line homozygosity is the
+  goal of the scheme and is not counted as risk.
+- **Report.** The run note describes the scheme and the expected residual
+  heterozygosity. The model-structure limitation now depends on the mating
+  system.
+- **Demo.**
+  - "Mating system" and "SSD generations" inputs.
+  - New preset **Wheat lines (SSD, years)**: 4 SSD generations, a 5-year
+    cycle and GS at 2.5 years over 30 years. OCS holds F at 0.06; GS
+    leads per year at 0.21 σA/yr with F 0.40.
+- **Textbook check.** At equal parent numbers line breeding roughly
+  doubles ΔF relative to outcrossing (balanced: 2.6 % vs 1.7 % per cycle),
+  because each inbred parent transmits a single gamete type.
+
+### Tests
+
+`lines_test.go`:
+- DH lines are fully homozygous;
+- SSD residual heterozygosity is (1/2)^k for k = 1, 3;
+- coancestry among unrelated DH lines is 0 even though each is IBD within
+  itself;
+- SSD and DH runs end-to-end; an unknown mating system is rejected.
+
 ## [0.8.7] - 2026-10-20
 
 ### Changed — climate as genotype × environment interaction (Issue 38)

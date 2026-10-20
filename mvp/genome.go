@@ -303,6 +303,13 @@ func poisson(lambda float64, rng *rand.Rand) int {
 // tracker loci. Under random mating it is the expected inbreeding of the
 // next generation; it is 0 for the founder generation.
 func ibdCoancestry(pop []organism) float64 {
+	return ibdCoancestryPairs(pop, false)
+}
+
+// ibdCoancestryPairs is ibdCoancestry; with betweenOnly it ignores the two
+// copies inside one individual — coancestry among lines, the risk measure
+// for line breeding, where within-line homozygosity is the goal (v0.8.8).
+func ibdCoancestryPairs(pop []organism, betweenOnly bool) float64 {
 	if len(pop) == 0 || len(pop[0].ibd) == 0 {
 		return 0
 	}
@@ -332,6 +339,16 @@ func ibdCoancestry(pop []organism) float64 {
 			counts[lab] = 0
 		}
 		touched = touched[:0]
+		if betweenOnly {
+			var within float64
+			for i := range pop {
+				if pop[i].ibd[t] == pop[i].ibd[T+t] {
+					within += 2
+				}
+			}
+			sum += (pairs - within) / (float64(copies)*float64(copies-1) - float64(copies))
+			continue
+		}
 		sum += pairs / (float64(copies) * float64(copies-1))
 	}
 	return sum / float64(T)
@@ -355,4 +372,79 @@ func parseSiteList(items []string) []markerSite {
 		out = append(out, markerSite{chrom: it[:i], pos: pos})
 	}
 	return out
+}
+
+// v0.8.8 — Issue 39. Inbred-line derivation for self-pollinating crops.
+
+const (
+	matingOutcross        = "random"
+	matingSSD             = "ssd"
+	matingDoubledHaploid  = "dh"
+	defaultSSDGenerations = 4
+)
+
+// selfed returns one offspring of o selfed: two independent gametes of o.
+func (gm *genomeMap) selfed(o *organism, mutationRate float64, rng *rand.Rand, xo []float64) organism {
+	child := gm.newOrganism()
+	gm.transmit(o, &child, 0, mutationRate, rng, xo)
+	gm.transmit(o, &child, 1, mutationRate, rng, xo)
+	return child
+}
+
+// doubledHaploid returns a fully homozygous line from one gamete of o; both
+// strands carry the same alleles and the same IBD labels.
+func (gm *genomeMap) doubledHaploid(o *organism, mutationRate float64, rng *rand.Rand, xo []float64) organism {
+	child := gm.newOrganism()
+	gm.transmit(o, &child, 0, mutationRate, rng, xo)
+	T := len(gm.trackers)
+	for m := range child.geno {
+		child.geno[m] *= 2
+	}
+	copy(child.ibd[T:], child.ibd[:T])
+	return child
+}
+
+// deriveLines turns each F1 in pop into an inbred line in place: one
+// doubled-haploid step, or ssdGenerations rounds of single-seed descent.
+// Outcrossing leaves pop unchanged.
+func deriveLines(pop []organism, system string, ssdGenerations int, gm *genomeMap, mutationRate float64, rng *rand.Rand) {
+	xo := make([]float64, 0, 16)
+	switch system {
+	case matingDoubledHaploid:
+		for i := range pop {
+			pop[i] = gm.doubledHaploid(&pop[i], mutationRate, rng, xo)
+		}
+	case matingSSD:
+		for i := range pop {
+			for k := 0; k < ssdGenerations; k++ {
+				pop[i] = gm.selfed(&pop[i], mutationRate, rng, xo)
+			}
+		}
+	}
+}
+
+// homozygousFounders doubles one gamete of every founder whose observed
+// heterozygosity exceeds maxHet, so a line-breeding run starts from inbred
+// lines. Real inbred accessions (heterozygosity ≤ maxHet) are kept as they
+// are. Returns how many founders were converted.
+func homozygousFounders(pop []organism, gm *genomeMap, maxHet float64, rng *rand.Rand) int {
+	converted := 0
+	xo := make([]float64, 0, 16)
+	for i := range pop {
+		het := 0
+		for _, g := range pop[i].geno {
+			if g == 1 {
+				het++
+			}
+		}
+		if float64(het) <= maxHet*float64(len(pop[i].geno)) {
+			continue
+		}
+		labels := append([]uint16(nil), pop[i].ibd...)
+		pop[i] = gm.doubledHaploid(&pop[i], 0, rng, xo)
+		// Founders stay the IBD base: keep their two distinct labels.
+		copy(pop[i].ibd, labels)
+		converted++
+	}
+	return converted
 }

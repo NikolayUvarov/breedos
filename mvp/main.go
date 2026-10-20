@@ -119,6 +119,12 @@ type SimRequest struct {
 	// optimum-contribution strategy (ocs.go). 0 → 0.01 (FAO: ΔF ≤ 1 %,
 	// Ne ≥ 50).
 	TargetDeltaF float64 `json:"target_delta_f,omitempty"`
+	// v0.8.8 — Issue 39. "random" (default) = one outcrossing population;
+	// "ssd" / "dh" = line breeding for self-pollinating crops: selected
+	// lines are crossed in pairs and each F1 becomes an inbred line by
+	// SSDGenerations of single-seed descent or by one doubled-haploid step.
+	MatingSystem   string `json:"mating_system,omitempty"`
+	SSDGenerations int    `json:"ssd_generations,omitempty"`
 }
 
 // v0.7.21 — Issue 18. Single trait's architecture within a multi-trait run.
@@ -308,6 +314,9 @@ type runModel struct {
 	// v0.8.7 — Issue 38. Environmental variance for selection on the
 	// target-season value under G×E.
 	varEnvTarget float64
+	// v0.8.8 — Issue 39. Line derivation after each cross.
+	matingSystem   string
+	ssdGenerations int
 }
 
 func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []float64) runModel {
@@ -317,10 +326,12 @@ func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []f
 		acc = math.Sqrt(req.Heritability)
 	}
 	return runModel{
-		genome:   gm,
-		varEnv:   environmentalVariance(varG0, req.Heritability),
-		gsErrVar: varG0 * (1 - acc*acc) / (acc * acc),
-		sigmaA0:  math.Sqrt(varG0),
+		genome:         gm,
+		varEnv:         environmentalVariance(varG0, req.Heritability),
+		gsErrVar:       varG0 * (1 - acc*acc) / (acc * acc),
+		sigmaA0:        math.Sqrt(varG0),
+		matingSystem:   req.MatingSystem,
+		ssdGenerations: req.SSDGenerations,
 	}
 }
 
@@ -871,6 +882,11 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	// effects above stay identical to v0.7.x for the same seed.
 	gm := buildGenomeMap(req, datasetMeta)
 	initFounders(initial, gm, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset)))
+	// v0.8.8 — Issue 39. Line breeding starts from inbred lines.
+	inbredFounders := 0
+	if lineBreeding(req) {
+		inbredFounders = homozygousFounders(initial, gm, 0.05, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset+1)))
+	}
 	model := newRunModel(req, gm, initial, effects)
 	// v0.8.7 — Issue 38. Under a climate scenario, selection uses the
 	// normal-season effects while every metric is on the target mix of
@@ -919,6 +935,14 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	decision.EditDecisions = summarizeEditDecisions(candidates)
 	reportProgress(progress, 98, "building response")
 	notes := buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm)
+	if lineBreeding(req) {
+		how := "one doubled-haploid step (fully homozygous lines)"
+		if req.MatingSystem == matingSSD {
+			how = fmt.Sprintf("%d generations of single-seed descent (expected residual heterozygosity %.1f%% of the F1)", req.SSDGenerations, 100*math.Pow(0.5, float64(req.SSDGenerations)))
+		}
+		notes = append(notes, fmt.Sprintf("Line breeding: selected lines are crossed in pairs and each F1 becomes an inbred line by %s. h² is on an entry-mean basis among lines. Inbreeding F is coancestry among lines; homozygosity within a line is the goal and is not counted as risk. %d of %d founders were converted to homozygous lines (the rest were already inbred).", how, inbredFounders, len(initial)))
+		decision.KeyAssumptions = append(decision.KeyAssumptions, "Self-pollinating line breeding (cross → SSD/DH → line); one cycle = cross + line derivation + evaluation. Set cycle_years to the program's real cycle length.")
+	}
 	if gxe != nil {
 		notes = append(notes, fmt.Sprintf("Climate as G×E: %s in %.0f%% of seasons with a %.0f%% mean yield loss. Normal- and stress-season performance share %d QTL; %d act only in normal seasons (yield potential) and %d only under stress. Founder genetic correlation rg = %.2f (target %.2f). Strategies select in normal-season nurseries unless marked otherwise; gain is reported for the target mix of seasons.", req.Climate.Mode, 100*gxe.frequency, 100*gxe.loss, gxe.nShared, gxe.nNormal, gxe.nStress, gxe.founderRG, gxe.rg))
 		decision.KeyAssumptions = append(decision.KeyAssumptions, fmt.Sprintf("Climate stress modelled as genotype × environment interaction (rg = %.2f between normal and stress seasons), not as a uniform penalty.", gxe.founderRG))
@@ -1897,7 +1921,7 @@ func buildLimitations(req SimRequest) []string {
 	out := []string{
 		"Diploid biallelic markers; no copy-number variation, no structural variants.",
 		"Recombination follows a genetic map with Poisson crossovers (Haldane, no crossover interference); without dataset positions the map is synthetic (evenly spaced markers on equal-length chromosomes).",
-		"One random-mating outcrossing population with equal parent contributions: no selfing, doubled haploids, hybrids, sexes, overlapping generations, or trial stages. Cycle length in years is an input (cycle_years); costs are not modelled.",
+		programStructureLimitation(req),
 		"Additive trait architecture only; no dominance, no epistasis, no pleiotropy.",
 		"No genotype-by-environment (GxE) interaction; trait expression treated as environment-invariant.",
 		"No production genomic-prediction model (GBLUP / Bayesian / ML); the predictor is a mock signal for demonstration only.",
@@ -2073,6 +2097,25 @@ func normalizeRequest(req *SimRequest) {
 	if req.TargetDeltaF == 0 {
 		req.TargetDeltaF = defaultTargetDeltaF
 	}
+	if req.MatingSystem == "" {
+		req.MatingSystem = matingOutcross
+	}
+	if req.MatingSystem == matingSSD && req.SSDGenerations == 0 {
+		req.SSDGenerations = defaultSSDGenerations
+	}
+}
+
+// programStructureLimitation states which program structure the run models.
+func programStructureLimitation(req SimRequest) string {
+	if lineBreeding(req) {
+		return "Line breeding with discrete cycles (cross → SSD/DH → line, evaluated on an entry-mean basis): no hybrids or heterosis, no multi-stage yield trials or within-cycle line selection; cycle length in years is an input (cycle_years), costs are not modelled."
+	}
+	return "One random-mating outcrossing population with discrete generations: no hybrids, sexes, overlapping generations or trial stages (set mating_system to ssd or dh for self-pollinating line breeding). Cycle length in years is an input (cycle_years); costs are not modelled."
+}
+
+// lineBreeding reports whether the run derives inbred lines each cycle.
+func lineBreeding(req SimRequest) bool {
+	return req.MatingSystem == matingSSD || req.MatingSystem == matingDoubledHaploid
 }
 func validateRequest(req SimRequest, strategyCount int) error {
 	if req.PopulationSize < 2 || req.PopulationSize > 5000 {
@@ -2108,6 +2151,14 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	}
 	if req.CycleYears < 0 || req.CycleYears > 30 || req.GenomicCycleYears < 0 || req.GenomicCycleYears > 30 {
 		return errors.New("cycle_years and genomic_cycle_years must be between 0 and 30 years (0 = no time axis / same as cycle_years)")
+	}
+	switch req.MatingSystem {
+	case "", matingOutcross, matingSSD, matingDoubledHaploid:
+	default:
+		return fmt.Errorf("mating_system must be random, ssd or dh; got %q", req.MatingSystem)
+	}
+	if req.SSDGenerations < 0 || req.SSDGenerations > 10 {
+		return errors.New("ssd_generations must be between 1 and 10 (selfing generations from F1 to the line)")
 	}
 	if req.TargetDeltaF < 0 || req.TargetDeltaF > 0.2 {
 		return errors.New("target_delta_f must be in (0, 0.2] (rate of inbreeding per generation, e.g. 0.01 for 1%); 0 or omitted means 0.01")
@@ -2294,12 +2345,13 @@ func clonePopulation(pop []organism) []organism {
 
 func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects, selEffects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
-	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0))
+	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0, lineBreeding(req)))
 	cycle := cycleYearsFor(req, cfg)
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents := selectParents(pop, selEffects, req, cfg, model, rng, gen)
 		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
-		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents))
+		deriveLines(pop, model.matingSystem, model.ssdGenerations, model.genome, req.MutationRate, rng)
+		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents), lineBreeding(req))
 		m.Year = round4(float64(gen) * cycle)
 		metrics = append(metrics, m)
 		if progress != nil {
@@ -2567,13 +2619,13 @@ func chooseSecondParent(pop []organism, parents []int, p1 int, rng *rand.Rand, m
 // computeMetrics summarises one generation. v0.8.0: Inbreeding is IBD
 // coancestry relative to the founders (ibdCoancestry), no longer
 // 1 − He/He₀ — that quantity is the diversity loss, reported separately.
-func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean, sigmaA0 float64, rareUsefulAtStart []int, effectiveParents int) MetricPoint {
+func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean, sigmaA0 float64, rareUsefulAtStart []int, effectiveParents int, betweenLines bool) MetricPoint {
 	freq := alleleFreq(pop, len(effects))
 	div := diversityFromFreq(freq)
 	trait := meanGeneticValue(pop, effects)
 	drift := meanAbsDiff(freq, baseFreq)
 	fixed, favorableFixed, unfavorableFixed := fixationStats(freq, effects)
-	inbreeding := ibdCoancestry(pop)
+	inbreeding := ibdCoancestryPairs(pop, betweenLines)
 	gainSigma := 0.0
 	if sigmaA0 > 0 {
 		gainSigma = (trait - baseMean) / sigmaA0

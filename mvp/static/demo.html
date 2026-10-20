@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.7 — linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.8 — linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -56,6 +56,7 @@
           <button class="btn tiny" type="button" data-preset="large">Large fast</button>
           <button class="btn tiny" type="button" data-preset="crispr">CRISPR seed</button>
           <button class="btn tiny" type="button" data-preset="gs_years">GS vs phenotype (years)</button>
+          <button class="btn tiny" type="button" data-preset="wheat_lines">Wheat lines (SSD, years)</button>
           <button class="btn tiny" type="button" data-preset="holstein" title="Educational: the engine has no sexes, no overlapping generations and no bull/cow selection tiers, which drive Ne in real dairy populations.">Holstein dairy (educational)</button>
           <button class="btn tiny" type="button" data-preset="methane_dairy_intensity" title="Educational multi-trait demo; see the Holstein caveat.">Methane MeI (educational)</button>
           <button class="btn tiny" type="button" data-preset="methane_dairy_production" title="Educational multi-trait demo; see the Holstein caveat.">Methane MeP (educational)</button>
@@ -154,6 +155,26 @@
               <span>1–200</span>
             </label>
             <input id="generations" type="number" min="1" max="200" value="30">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Mating system <span class="tip" tabindex="0" data-tip="Outcrossing: one random-mating population. SSD / DH: line breeding for self-pollinating crops — selected lines are crossed in pairs and each F1 becomes an inbred line by single-seed descent or doubled haploids. Inbreeding is then coancestry among lines.">?</span></span>
+              <span>program type</span>
+            </label>
+            <select id="mating_system">
+              <option value="random" selected>Outcrossing (random mating)</option>
+              <option value="ssd">Inbred lines: SSD</option>
+              <option value="dh">Inbred lines: doubled haploids</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>
+              <span>SSD generations <span class="tip" tabindex="0" data-tip="Selfing generations from F1 to the line (4 = F5 lines, ≈6% residual heterozygosity). Used only with SSD.">?</span></span>
+              <span>SSD only</span>
+            </label>
+            <input id="ssd_generations" type="number" min="1" max="10" step="1" value="4">
           </div>
 
           <div class="field">

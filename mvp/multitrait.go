@@ -309,11 +309,11 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTrai
 
 	appendGen := func(gen int, eff int) {
 		// Aggregate metric on trait 0 (headline).
-		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, mm.sigmaA0[0], rareUsefulAtStart, eff))
+		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, mm.sigmaA0[0], rareUsefulAtStart, eff, lineBreeding(req)))
 		// Per-trait MetricPoints — we only need a small subset for charts,
 		// reuse computeMetrics with per-trait effects + baseline.
 		for t := 0; t < T; t++ {
-			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], mm.sigmaA0[t], rareUsefulAtStart, eff))
+			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], mm.sigmaA0[t], rareUsefulAtStart, eff, lineBreeding(req)))
 		}
 	}
 	populateNeOnAggregate := func() {
@@ -336,6 +336,7 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTrai
 		}
 		indexHistory = append(indexHistory, round4(meanIdx))
 		pop = makeNextGeneration(pop, parents, mm.genome, req.MutationRate, rng, cfg.MatingRule)
+		deriveLines(pop, req.MatingSystem, req.SSDGenerations, mm.genome, req.MutationRate, rng)
 		appendGen(gen, len(parents))
 		metrics[len(metrics)-1].Year = round4(float64(gen) * cycle)
 	}
@@ -472,6 +473,9 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 	effects := makeMultiTraitEffects(req.Markers, req.Traits, L, rng)
 	gm := buildGenomeMap(req, datasetMeta)
 	initFounders(initial, gm, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset)))
+	if lineBreeding(req) {
+		homozygousFounders(initial, gm, 0.05, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset+1)))
+	}
 	mm := newMultiTraitModel(gm, initial, effects, req.Traits)
 
 	baseFreq := alleleFreq(initial, req.Markers)
