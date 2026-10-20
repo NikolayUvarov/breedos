@@ -407,6 +407,7 @@ var simJobStore = struct {
 func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address, for example :8080 or 127.0.0.1:8080")
 	selfCheck := flag.Bool("self-check", false, "print OK and exit (used by the self-update contract)")
+	acmeWebroot := flag.String("acme-webroot", "auto", "webroot whose .well-known/acme-challenge/ files are served for certificate renewal; auto = <binary dir>/../html, off = disabled")
 	flag.Parse()
 	if *selfCheck {
 		fmt.Println("OK")
@@ -432,6 +433,11 @@ func main() {
 	// verification doesn't have to grep kicker HTML. The constants are
 	// updated in lockstep with the version-bump touchpoints in this file.
 	mux.HandleFunc("/api/version", versionHandler)
+	// v0.8.1 — certificate renewal through the reverse proxy (acme.go).
+	if dir := resolveACMEDir(*acmeWebroot); dir != "" {
+		mux.HandleFunc(acmeChallengePrefix, acmeChallengeHandler(dir))
+		log.Printf("serving ACME challenges from %s", dir)
+	}
 	// v0.7.26 — Issue 05. Minimal upload workflow.
 	mux.HandleFunc("/api/upload", uploadHandler)
 	// v0.7.26 — Issue 05. Static fixture files for the example links on

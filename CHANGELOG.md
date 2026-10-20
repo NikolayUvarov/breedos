@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-20
+
+### Fixed — TLS certificate renewal through the reverse proxy
+
+The production certificate for breedos.org expired on 2026-08-16 and could
+not renew. The reverse proxy routes every breedos.org path to this binary,
+including `/.well-known/acme-challenge/`, which returned 404, so every
+certbot HTTP-01 challenge failed.
+
+- The binary now serves ACME challenge tokens (`acme.go`). New flag
+  `-acme-webroot`:
+  - default `auto` = `<binary dir>/../html`, the host's
+    `hosts/<domain>/html` layout;
+  - a path sets the webroot explicitly;
+  - `off` disables it.
+- The route is registered only when `<webroot>/.well-known/acme-challenge`
+  exists.
+- Tokens must match the RFC 8555 base64url alphabet, so traversal is
+  refused. Test `TestACMEChallengeServesTokenAndRefusesTraversal`.
+- No change to simulation output.
+
 ## [0.8.0] - 2026-10-20
 
 ### Changed — model-correctness release (linked genome, IBD inbreeding, fixed VE)
