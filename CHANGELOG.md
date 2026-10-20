@@ -7,6 +7,146 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-20
+
+### Changed — model-correctness release (linked genome, IBD inbreeding, fixed VE)
+
+A review of the simulation core found four modelling defects that a
+quantitative geneticist would spot in minutes. All four are fixed here.
+Numbers change for every run; the API stays backward-compatible apart
+from the two validation tightenings listed under **Breaking**.
+
+**1. Linked genome instead of free recombination.** Up to v0.7.39 every
+marker was inherited independently, so linkage, LD, hitchhiking and
+linkage drag could not exist. Markers now sit on chromosomes with a
+genetic map in Morgans. Each meiosis draws Poisson(L) crossovers per
+chromosome at uniform positions (Haldane, no interference), and
+individuals carry phased haplotypes (`genome.go`).
+- The synthetic map defaults to 10 chromosomes × 1 M. New optional
+  request fields: `chromosomes`, `chromosome_length_morgans`.
+- Datasets that carry positions (the `# Sites (chrom:pos)` line written by
+  the fetch scripts, or `chrom:pos` header labels) get their real
+  chromosomes. Physical distance is scaled at one genome-wide rate.
+- Founder genotypes are unphased dosages and are phased at random.
+
+**2. Inbreeding is identity by descent, not heterozygosity loss.**
+`inbreeding` was `1 − He_t/He₀`, computed on the same markers the
+novelty score selects on. A strategy could therefore lower it by pushing
+marker frequencies toward 0.5. The diversity-preserving strategy ended
+20 generations with heterozygosity *above* its starting value and
+F = 0, where drift alone predicts ≈ 0.10. It was also numerically the
+same quantity as diversity loss, so the two risk limits double-counted.
+- Every founder haplotype now carries a unique label at up to 512
+  tracker loci.
+- F is the probability that two allele copies drawn from the population
+  are IBD relative to the founders. Under random mating this is the
+  expected inbreeding of the next generation.
+- `diversity` remains expected heterozygosity on all markers.
+
+**3. Environmental variance is fixed at generation 0.** VE used to be
+recomputed from the *current* genetic variance every generation, which
+held h² constant as selection eroded VG. That flattered aggressive
+selection, which works against BreedOS's own thesis. VE is now set once
+from h² and the founder VG, so realised heritability (and the accuracy
+of phenotypic selection) falls as VG erodes. The phenotype z-score in
+the composite strategies is standardised by phenotypic SD instead of
+σG, so `TraitWeight` means the same thing at every h² and generation.
+
+**4. Honest genomic-selection mock.** The mock's realised accuracy was
+≈ 0.87 when its nominal accuracy √h² was 0.71. Now prediction = true
+breeding value + error, with the error variance fixed at generation 0,
+so the accuracy is exactly the configured value at generation 0 and
+decays as VG erodes. New optional field `genomic_accuracy` (default √h²).
+The run notes say plainly that the real-world GS edge, a shorter
+cycle, needs a time axis this version does not model.
+
+**New outputs.**
+- `metrics[].gain_sigma`: gain in founder-σA units.
+- `metrics[].delta_f`: (F_t − F_{t−1}) / (1 − F_{t−1}).
+- `final.genetic_gain_sigma`.
+- `final.mean_delta_f` = 1 − (1 − F_T)^(1/T).
+- `final.ne` = 1 / (2 ΔF).
+- Ne per generation now uses the proper rate of inbreeding instead of the
+  raw difference.
+
+**Same scenario, v0.7.39 → v0.8.0** (seed 7, N=200, 1000 markers,
+50 QTL, 40 generations, 10% selection, h²=0.25, advanced set,
+10 replicates):
+
+| strategy | F v0.7.39 | F v0.8.0 | ΔF/gen | Ne | gain (σA) |
+|---|---:|---:|---:|---:|---:|
+| aggressive | 0.791 | 0.788 | 3.81% | 13 | 8.33 |
+| balanced | 0.421 | 0.420 | 1.35% | 37 | 8.55 |
+| ocs_like | 0.433 | 0.421 | 1.36% | 37 | 8.76 |
+| cross_planner | 0.238 | **0.340** | 1.03% | 49 | 7.99 |
+| diversity | 0.201 | **0.327** | 0.99% | 51 | 5.53 |
+| neutral | 0.097 | 0.095 | 0.25% | 200 | −0.06 |
+
+Neutral and the selecting strategies without a novelty term agree with
+the old metric, as expected under drift. The strategies that select on
+marker novelty lose their artificial F advantage.
+
+### Fixed
+
+- **Issue 34 — `selection_percent` unit ambiguity.**
+  - Values below 1 are rejected with HTTP 400 and the worked fix:
+    *"Received 0.2, which selects 0.4 of 200 individuals. If you meant 20%,
+    send 20"*.
+  - An explicit `"selection_percent": 0` is rejected. An omitted field
+    still defaults to 10.
+  - When truncation floors the parent pool to 2, the response carries
+    `degenerate_run: true`, the warning becomes note #0 with a ⚠ prefix,
+    and the demo shows a red banner.
+  - The demo pre-flights the range client-side, because the production
+    proxy replaces 400 bodies.
+- **Baselines are never recommended.** Under harsh selection every
+  selecting strategy burns diversity, and the neutral-drift baseline
+  could win the risk-adjusted ranking, i.e. the report recommended "do
+  not select". `neutral` and `random` now rank after every selecting
+  strategy and are excluded from the recommended / lowest-risk /
+  best-feasible picks. They stay in the table for comparison.
+- **Dataset marker subsampling covers the genome.**
+  `subsampleDataset` took the first m columns. On the genome-ordered
+  Arabidopsis file, a 900-marker run therefore covered only the first
+  ~3 Mb of chromosome 1. Markers are now taken at an even stride.
+- Ancestral-introgression lines keep their founder IBD labels and get a
+  phase.
+
+### Changed — UI and docs
+
+- Demo:
+  - The gain chart is in founder-σA units.
+  - Inbreeding and diversity charts are labelled with what they measure.
+  - The results table shows σA gain, ΔF and Ne.
+  - The selection-percent input minimum is 1.
+- Russian landing (`/ru`) rewritten: phenomenon-first hero with a chart
+  of real v0.8.0 output (aggressive vs balanced, N=100, seed 7), who it
+  is for, what is inside, and what BreedOS does not do yet.
+- README brought up to date with the current engine, API and limits.
+- Version footers read v0.8.0.
+
+### Breaking
+
+- `selection_percent` < 1 or an explicit 0 now returns HTTP 400.
+- `inbreeding`, the inbreeding-breach probability, the Ne trajectory, and
+  every constraint on max inbreeding now use IBD F. Results are not
+  comparable with v0.7.x runs.
+
+### Tests
+
+`genome_test.go` pins the model to textbook expectations:
+- recombination fraction at d = 0.5 M matches Haldane, (1 − e^(−1))/2;
+- unlinked markers segregate 50:50;
+- founders have F = 0;
+- neutral F after 20 generations matches 1 − (1 − 1/2N)^t;
+- the diversity strategy can no longer push F below its drift
+  expectation;
+- gain_sigma consistency;
+- VE / GS-error-variance construction;
+- map from dataset positions, header-site parsing, unsorted fallback;
+- Issue 34 (0.2, 0, 120 rejected; 20 accepted; degenerate flag);
+- baselines are never recommended.
+
 ## [0.7.39] - 2026-08-24
 
 ### Fixed — biological surface stops advertising the prompt substrate

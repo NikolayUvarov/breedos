@@ -229,6 +229,9 @@ function setFormValues(values) {
     if (!el) continue;
     if (el.type === 'checkbox') el.checked = Boolean(value);
     else el.value = String(value);
+    // v0.8.0: presets now carry a dataset; let the selector's handler
+    // hide the upload panel when a preset switches away from uploads.
+    if (id === 'dataset') el.dispatchEvent(new Event('change'));
   }
   updateBudgetMeter();
   refreshSelectionIndexComposer();
@@ -237,6 +240,7 @@ function setFormValues(values) {
 
 const presets = {
   tiny: {
+    dataset: 'synthetic',
     seed: 20260505,
     population_size: 8,
     markers: 180,
@@ -255,6 +259,7 @@ const presets = {
     diversity_loss_limit: 0.30
   },
   balanced: {
+    dataset: 'synthetic',
     seed: 20260505,
     population_size: 400,
     markers: 900,
@@ -273,6 +278,7 @@ const presets = {
     diversity_loss_limit: 0.30
   },
   large: {
+    dataset: 'synthetic',
     seed: 20260505,
     population_size: 2500,
     markers: 800,
@@ -291,6 +297,7 @@ const presets = {
     diversity_loss_limit: 0.30
   },
   crispr: {
+    dataset: 'synthetic',
     seed: 20260505,
     population_size: 240,
     markers: 700,
@@ -315,6 +322,7 @@ const presets = {
   // 0.20 reflects the published Holstein concern range; single-trait until
   // the multi-trait engine ships (Issue 18).
   holstein: {
+    dataset: 'holstein_synthetic',
     seed: 20260601,
     population_size: 800,
     markers: 1500,
@@ -338,6 +346,7 @@ const presets = {
   // against methane intensity also improves milk yield — the operator-
   // facing "happy path".
   methane_dairy_intensity: {
+    dataset: 'holstein_synthetic',
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -368,6 +377,7 @@ const presets = {
   // selecting against methane production trades off against milk yield.
   // Same shape as the intensity preset; different correlation sign.
   methane_dairy_production: {
+    dataset: 'holstein_synthetic',
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -416,6 +426,18 @@ async function runSimulation() {
   if (updateBudgetMeter().over) {
     const cells = formatCells(runBudgetCells(request));
     setStatus(`Run budget ${cells} cells exceeds the MVP cap of ${formatCells(BUDGET_CAP)}. Reduce population size, markers, generations, or replicates.`, 'error');
+    return;
+  }
+  // v0.8.0 — Issue 34. Mirror the server's selection_percent check here:
+  // the production proxy replaces 400 bodies, so the server's unit hint
+  // would never reach the user.
+  const sel = Number(request.selection_percent);
+  if (!(sel >= 1 && sel <= 100)) {
+    const n = Number(request.population_size) || 0;
+    const hint = sel > 0 && sel < 1
+      ? ` ${sel} selects ${(n * sel / 100).toFixed(2)} of ${n} individuals — if you meant ${sel * 100}%, enter ${sel * 100}.`
+      : '';
+    setStatus(`Selection intensity is a percent on a 1–100 scale (e.g. 20 for 20%).${hint}`, 'error');
     return;
   }
   const originalText = btn ? btn.textContent : '';
@@ -555,9 +577,9 @@ function renderAll(data, prev) {
   renderDecisionPanel(data);
   renderSummary(data, prev);
   renderNotes(data, prev);
-  drawMetricChart('chart_gain', 'legend_gain', data, prev, 'genetic_gain', 'Genetic gain');
-  drawMetricChart('chart_diversity', 'legend_diversity', data, prev, 'diversity', 'Diversity');
-  drawMetricChart('chart_inbreeding', 'legend_inbreeding', data, prev, 'inbreeding', 'Inbreeding');
+  drawMetricChart('chart_gain', 'legend_gain', data, prev, 'gain_sigma', 'Genetic gain (founder σA)');
+  drawMetricChart('chart_diversity', 'legend_diversity', data, prev, 'diversity', 'Diversity (expected heterozygosity)');
+  drawMetricChart('chart_inbreeding', 'legend_inbreeding', data, prev, 'inbreeding', 'Inbreeding F (identity by descent)');
   drawNeChart('chart_ne', 'legend_ne', data, prev);
   drawMetricChart('chart_drift', 'legend_drift', data, prev, 'allele_drift', 'Allele drift');
   drawMetricChart('chart_lost', 'legend_lost', data, prev, 'rare_useful_lost', 'Rare useful loci lost');
@@ -594,7 +616,10 @@ function renderDecisionPanel(data) {
   const wrong = (d.what_could_be_wrong || []).map(w => `<li>${escapeHtml(w)}</li>`).join('');
   const limitations = (d.limitations || []).map(l => `<li>${escapeHtml(l)}</li>`).join('');
   const next = d.next_analysis ? `<p class="decision-next"><strong>Recommended next analysis:</strong> ${escapeHtml(d.next_analysis)}</p>` : '';
-  const honesty = d.honesty_banner ? `<div class="decision-honesty-banner">${escapeHtml(d.honesty_banner)}</div>` : '';
+  const honesty = (data.degenerate_run
+      ? `<div class="decision-honesty-banner decision-degenerate-banner">⚠ Degenerate run: the selection intensity left fewer than two parents, so every selecting strategy ran on a 2-parent bottleneck. The report below does not describe your intended program — raise selection % or population size.</div>`
+      : '')
+    + (d.honesty_banner ? `<div class="decision-honesty-banner">${escapeHtml(d.honesty_banner)}</div>` : '');
   const feasibilityCard = constraintsApplied.length
     ? `<div class="decision-card feasible-card"><span>Best feasible</span><strong>${escapeHtml(bestFeasible ? (labels[bestFeasible.code] || bestFeasible.name) : 'none')}</strong><small>${bestFeasible ? 'risk-adjusted score ' + fmt(bestFeasible.final.risk_adjusted_score) : 'no strategy passes all constraints'}</small></div>`
     : '';
@@ -608,7 +633,7 @@ function renderDecisionPanel(data) {
     ${honesty}
     <div class="decision-grid${constraintsApplied.length ? ' decision-grid-4' : ''}">
       <div class="decision-card"><span>Recommended</span><strong>${escapeHtml(best ? (labels[best.code] || best.name) : '-')}</strong><small>risk-adjusted score ${best ? fmt(best.final.risk_adjusted_score) : '-'}</small></div>
-      <div class="decision-card"><span>Max gain</span><strong>${escapeHtml(bestGain ? (labels[bestGain.code] || bestGain.name) : '-')}</strong><small>${bestGain ? fmt(bestGain.final.genetic_gain) : '-'} final gain</small></div>
+      <div class="decision-card"><span>Max gain</span><strong>${escapeHtml(bestGain ? (labels[bestGain.code] || bestGain.name) : '-')}</strong><small>${bestGain ? fmt(bestGain.final.genetic_gain_sigma) + ' σA' : '-'} final gain</small></div>
       <div class="decision-card"><span>Lowest risk</span><strong>${escapeHtml(lowest ? (labels[lowest.code] || lowest.name) : '-')}</strong><small>${lowest ? fmt(combinedRisk(lowest.final)) : '-'} combined risk</small></div>
       ${feasibilityCard}
     </div>
@@ -853,9 +878,9 @@ function renderStrategyTable(strategies, prev) {
         <td><strong style="color:${colors[s.code] || '#fff'}">${escapeHtml(labels[s.code] || s.name)}</strong><br><span>${escapeHtml(s.summary)}</span></td>
         <td>${formatInt(s.final.decision_rank)}</td>
         <td>${fmt(s.final.risk_adjusted_score)}</td>
-        <td>${fmt(s.final.genetic_gain)}<br><span>±${fmt(s.final.gain_std)}</span></td>
+        <td>${fmt(s.final.genetic_gain)}<br><span>±${fmt(s.final.gain_std)} · ${fmt(s.final.genetic_gain_sigma)} σA</span></td>
         <td>${fmt(s.final.diversity)}<br><span>±${fmt(s.final.diversity_std)}</span></td>
-        <td>${fmt(s.final.inbreeding)}<br><span>±${fmt(s.final.inbreeding_std)}</span></td>
+        <td>${fmt(s.final.inbreeding)}<br><span>±${fmt(s.final.inbreeding_std)} · ΔF ${(100 * (Number(s.final.mean_delta_f) || 0)).toFixed(2)}% · Ne ${formatInt(Math.round(Number(s.final.ne) || 0))}</span></td>
         <td>${fmt(combinedRisk(s.final))}</td>
         <td>${fmt(s.final.probability_inbreeding_breach)} / ${fmt(s.final.probability_diversity_collapse)} / ${fmt(s.final.probability_rare_useful_loss)}</td>
         <td>${formatInt(s.final.fixed_loci)}</td>

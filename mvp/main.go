@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math"
@@ -95,6 +97,16 @@ type SimRequest struct {
 	// `AncestralStressToleranceDefault` (also 0.5).
 	AncestralIntroPercent    float64 `json:"ancestral_intro_percent,omitempty"`
 	AncestralStressTolerance float64 `json:"ancestral_stress_tolerance,omitempty"`
+	// v0.8.0 — linked genome. Used for the synthetic genetic map; a dataset
+	// that carries marker positions uses its own chromosomes and only takes
+	// ChromosomeLengthM as the average chromosome length. 0 → defaults
+	// (10 chromosomes × 1 Morgan).
+	Chromosomes       int     `json:"chromosomes,omitempty"`
+	ChromosomeLengthM float64 `json:"chromosome_length_morgans,omitempty"`
+	// v0.8.0 — accuracy (correlation with the true breeding value) of the
+	// genomic-selection mock at generation 0. 0 → √h², the accuracy of
+	// phenotypic selection on the same trait.
+	GenomicAccuracy float64 `json:"genomic_accuracy,omitempty"`
 }
 
 // v0.7.21 — Issue 18. Single trait's architecture within a multi-trait run.
@@ -114,6 +126,10 @@ type SimResponse struct {
 	Strategies     []StrategyResult `json:"strategies"`
 	CandidateEdits []EditCandidate  `json:"candidate_edits"`
 	Notes          []string         `json:"notes"`
+	// v0.8.0 — Issue 34. True when the selected parent pool had to be
+	// floored to 2 individuals: the run completed but its report describes
+	// a bottleneck the operator almost certainly did not intend.
+	DegenerateRun bool `json:"degenerate_run,omitempty"`
 }
 
 type DecisionSummary struct {
@@ -200,6 +216,11 @@ type MetricPoint struct {
 	// numerically tiny to avoid divide-by-zero on log-scale chart. Generation
 	// 0 has no preceding generation; its Ne is set to the cap.
 	Ne float64 `json:"ne"`
+	// v0.8.0. GainSigma is GeneticGain in units of the founder additive
+	// SD (σA at generation 0). DeltaF is the rate of inbreeding
+	// (F[t] − F[t−1]) / (1 − F[t−1]) that Ne is derived from.
+	GainSigma float64 `json:"gain_sigma"`
+	DeltaF    float64 `json:"delta_f"`
 }
 
 type FinalStats struct {
@@ -226,6 +247,11 @@ type FinalStats struct {
 	RecommendedNext              string  `json:"recommended_next"`
 	Feasible                     bool    `json:"feasible"`
 	FailedConstraints            []string `json:"failed_constraints"`
+	// v0.8.0. Final gain in founder-σA units; mean per-generation rate of
+	// inbreeding over the run, 1 − (1 − F_T)^(1/T); and the Ne it implies.
+	GeneticGainSigma float64 `json:"genetic_gain_sigma"`
+	MeanDeltaF       float64 `json:"mean_delta_f"`
+	Ne               float64 `json:"ne"`
 }
 
 type EditCandidate struct {
@@ -243,7 +269,41 @@ type EditCandidate struct {
 	Classification *EditDecision `json:"classification,omitempty"`
 }
 
-type organism struct{ geno []uint8 }
+// runModel holds run-level quantities shared by every strategy × replicate.
+// v0.8.0: the environment is a property of the trial, not of the
+// population, so the environmental variance is fixed at generation 0 from
+// h² and the founder genetic variance. As selection erodes VG, realised
+// heritability (and with it the accuracy of phenotypic selection) falls —
+// before v0.8.0 VE was recomputed from the current VG every generation,
+// which held h² constant and flattered aggressive strategies. The
+// genomic-prediction error variance is fixed the same way.
+type runModel struct {
+	genome   *genomeMap
+	varEnv   float64
+	gsErrVar float64
+	sigmaA0  float64
+}
+
+func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []float64) runModel {
+	_, varG0 := meanVar(geneticValues(founders, effects))
+	acc := req.GenomicAccuracy
+	if acc <= 0 {
+		acc = math.Sqrt(req.Heritability)
+	}
+	return runModel{
+		genome:   gm,
+		varEnv:   environmentalVariance(varG0, req.Heritability),
+		gsErrVar: varG0 * (1 - acc*acc) / (acc * acc),
+		sigmaA0:  math.Sqrt(varG0),
+	}
+}
+
+func environmentalVariance(varG0, h2 float64) float64 {
+	if h2 <= 0 || h2 >= 1 {
+		return 0
+	}
+	return varG0 * (1 - h2) / h2
+}
 
 type scoredIndividual struct {
 	idx     int
@@ -448,11 +508,9 @@ func simulateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
-	var req SimRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+	req, err := decodeSimRequest(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	resp, err := runSimulation(req)
@@ -474,11 +532,9 @@ func startSimulationJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
-	var req SimRequest
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil {
-		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
+	req, err := decodeSimRequest(r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	normalizeRequest(&req)
@@ -524,6 +580,29 @@ func simulationJobStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, status)
+}
+
+// decodeSimRequest parses a simulate request body. Missing fields take the
+// defaults in normalizeRequest; an explicit "selection_percent": 0 is
+// rejected instead of being defaulted to 10 (v0.8.0 — Issue 34).
+func decodeSimRequest(body io.Reader) (SimRequest, error) {
+	raw, err := io.ReadAll(body)
+	if err != nil {
+		return SimRequest{}, fmt.Errorf("read body: %w", err)
+	}
+	var req SimRequest
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		return SimRequest{}, fmt.Errorf("invalid json: %w", err)
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) == nil {
+		if v, ok := fields["selection_percent"]; ok && req.SelectionPercent == 0 && string(v) != "null" {
+			return SimRequest{}, errors.New("selection_percent must be in (0, 100] — it is a percent on a 0–100 scale (e.g. 20 for 20%); got 0")
+		}
+	}
+	return req, nil
 }
 
 func createSimulationJob() string {
@@ -701,6 +780,11 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	}
 
 	effects := makeEffects(req.Markers, req.QTLCount, rng)
+	// v0.8.0. Founder phase is drawn from its own stream so the QTL
+	// effects above stay identical to v0.7.x for the same seed.
+	gm := buildGenomeMap(req, datasetMeta)
+	initFounders(initial, gm, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset)))
+	model := newRunModel(req, gm, initial, effects)
 	baseFreq := alleleFreq(initial, req.Markers)
 	baseDiversity := diversityFromFreq(baseFreq)
 	baseMean := meanGeneticValue(initial, effects)
@@ -720,7 +804,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		}
 	}
 	reportProgress(progress, 5, "initial population, candidate edits, and strategy set ready")
-	results := simulateStrategiesDecisionEngine(req, strategies, initial, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, candidates, progress, snapshot)
+	results := simulateStrategiesDecisionEngine(req, strategies, model, initial, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, candidates, progress, snapshot)
 	annotateDecisionScores(results)
 	annotateFeasibility(req, results, baseDiversity)
 	decision := buildDecisionSummary(req, results, baseDiversity)
@@ -735,7 +819,18 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	// the per-candidate classifications produced by rankEditCandidates.
 	decision.EditDecisions = summarizeEditDecisions(candidates)
 	reportProgress(progress, 98, "building response")
-	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: buildNotes(req, len(strategies), baseDiversity, datasetMeta)}, nil
+	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm), DegenerateRun: degenerateParentPool(req)}, nil
+}
+
+// founderPhaseSeedOffset separates the founder-phase RNG stream from the
+// main run stream (v0.8.0).
+const founderPhaseSeedOffset = 0x5eed_0800
+
+// degenerateParentPool reports whether truncation at the requested
+// selection intensity yields fewer than two parents, so selectParents has
+// to floor the pool to 2 (Issue 34).
+func degenerateParentPool(req SimRequest) bool {
+	return int(math.Round(float64(req.PopulationSize)*req.SelectionPercent/100.0)) < 2
 }
 
 func datasetSelected(name string) bool {
@@ -753,13 +848,33 @@ func placeholderTag(ds *loadedDataset) string {
 	return ""
 }
 
-func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datasetMeta *loadedDataset) []string {
+func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datasetMeta *loadedDataset, gm *genomeMap) []string {
 	workers := effectiveWorkerCount(req.WorkerCount, strategyCount*req.Replicates)
-	notes := []string{
+	notes := []string{}
+	// v0.8.0 — Issue 34. A floored parent pool invalidates the whole
+	// report, so it leads the notes instead of trailing them.
+	if degenerateParentPool(req) {
+		baseParents := float64(req.PopulationSize) * req.SelectionPercent / 100.0
+		notes = append(notes, fmt.Sprintf("⚠ DEGENERATE RUN: selection_percent = %g selects %.2g of %d individuals, so every selecting strategy was forced to 2 parents. The inbreeding, diversity and feasibility figures below describe that 2-parent bottleneck, not your intended program. selection_percent is a percent on a 0–100 scale — raise it (e.g. 20 for 20%%) or increase population_size.", req.SelectionPercent, baseParents, req.PopulationSize))
+	}
+	notes = append(notes,
 		"This MVP is a decision-layer simulator, not a wet-lab protocol and not a CRISPR guide/off-target design tool.",
 		"The CRISPR part is intentionally minimal: it shows how candidate edits can be prioritized and injected into strategy simulation without providing laboratory instructions.",
 		fmt.Sprintf("The engine runs %d strategies × %d replicates = %d simulation jobs through a worker pool of %d workers.", strategyCount, req.Replicates, strategyCount*req.Replicates, workers),
 		fmt.Sprintf("Risk thresholds: inbreeding breach ≥ %.2f; diversity collapse means diversity loss ≥ %.2f relative to baseline diversity %.4f.", req.InbreedingLimit, req.DiversityLossLimit, baseDiversity),
+	)
+	if gm != nil {
+		notes = append(notes, fmt.Sprintf("Genome: %s; meiosis draws Poisson crossovers per chromosome (Haldane, no interference), so linkage and LD are simulated. Inbreeding F is identity by descent relative to the founders, tracked at %d loci; diversity is expected heterozygosity on all markers.", gm.source, len(gm.trackers)))
+	}
+	notes = append(notes, fmt.Sprintf("Environmental variance is fixed at generation 0 (h² = %.2f in the founders); realised heritability falls as selection erodes genetic variance. Gain is reported both in trait units and in founder-σA units (gain_sigma).", req.Heritability))
+	if req.StrategySet == "advanced" {
+		acc := req.GenomicAccuracy
+		accSrc := "set by genomic_accuracy"
+		if acc <= 0 {
+			acc = math.Sqrt(req.Heritability)
+			accSrc = "default √h², the same as phenotypic selection"
+		}
+		notes = append(notes, fmt.Sprintf("Genomic selection mock: prediction accuracy %.2f at generation 0 (%s), decaying as genetic variance erodes. Its real-world edge — a shorter breeding cycle — needs a time axis this version does not model yet.", acc, accSrc))
 	}
 	if req.Upload != "" {
 		notes = append(notes, fmt.Sprintf("Founder population came from upload %s (ephemeral, in-memory; not persisted). EARLY IMPORT path — not production integration. Phenotype, pedigree, and candidate-edit tables, if uploaded, are surfaced in the upload summary but NOT consumed by this run.", req.Upload))
@@ -790,10 +905,6 @@ func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datase
 	}
 	if req.PopulationSize < 10 {
 		notes = append(notes, "N < 10 is a stress-test regime, not a realistic breeding program. It is useful for showing why population size and diversity constraints matter.")
-	}
-	baseParents := int(math.Round(float64(req.PopulationSize) * req.SelectionPercent / 100.0))
-	if baseParents < 2 {
-		notes = append(notes, "Selection intensity would yield fewer than two parents; the simulator floors the selected parent pool to two when possible.")
 	}
 	expectedMutations := float64(req.PopulationSize) * float64(req.Markers) * 2 * float64(req.Generations) * req.MutationRate
 	if req.MutationRate == 0 {
@@ -886,7 +997,7 @@ type strategyTaskResult struct {
 	Result        StrategyResult
 }
 
-func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfig, initial []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, candidates []EditCandidate, progress progressFunc, snapshot snapshotFunc) []StrategyResult {
+func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfig, model runModel, initial []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, candidates []EditCandidate, progress progressFunc, snapshot snapshotFunc) []StrategyResult {
 	strategyCount := len(strategies)
 	jobCount := strategyCount * req.Replicates
 	resultsByStrategy := make([][]StrategyResult, strategyCount)
@@ -960,7 +1071,7 @@ func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfi
 				}
 				strategyRNG := rand.New(rand.NewSource(req.Seed + int64(1000+task.StrategyIndex*31337+task.Replicate*7919)))
 				emitSnapshot := snapshot != nil && task.StrategyIndex == trackIdx && task.Replicate == 0
-				res := simulateStrategy(req, task.Config, strategyPop, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, strategyRNG, func(gen int, currentPop []organism) {
+				res := simulateStrategy(req, task.Config, model, strategyPop, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, strategyRNG, func(gen int, currentPop []organism) {
 					done := atomic.AddInt64(&completedSteps, 1)
 					percent := 6 + int(math.Round(float64(done)*91.0/float64(totalSteps)))
 					reportProgress(progress, percent, fmt.Sprintf("parallel run: %d/%d strategy-generations complete; %s replicate %d/%d generation %d/%d", done, totalSteps, task.Config.Name, task.Replicate+1, req.Replicates, gen, req.Generations))
@@ -1052,11 +1163,12 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	metricCount := len(reps[0].Metrics)
 	metrics := make([]MetricPoint, metricCount)
 	for genIdx := 0; genIdx < metricCount; genIdx++ {
-		var trait, gain, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents float64
+		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents float64
 		for _, rep := range reps {
 			p := rep.Metrics[genIdx]
 			trait += p.TraitMean
 			gain += p.GeneticGain
+			gainSigma += p.GainSigma
 			diversity += p.Diversity
 			inbreeding += p.Inbreeding
 			drift += p.AlleleDrift
@@ -1067,7 +1179,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 			parents += float64(p.EffectiveParents)
 		}
 		den := float64(len(reps))
-		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
+		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
 	}
 	// v0.7.20 — Issue 20. Fill in Ne[t] = 1 / (2 ΔF) over the metrics slice.
 	populateNeTrajectory(metrics)
@@ -1101,8 +1213,24 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	}
 	finalMetric := metrics[len(metrics)-1]
 	final := FinalStats{TraitMean: finalMetric.TraitMean, GeneticGain: finalMetric.GeneticGain, Diversity: finalMetric.Diversity, Inbreeding: finalMetric.Inbreeding, AlleleDrift: finalMetric.AlleleDrift, RareUsefulLost: finalMetric.RareUsefulLost, FixedLoci: finalMetric.FixedLoci, FavorableFixed: finalMetric.FavorableFixed, UnfavorableFixed: finalMetric.UnfavorableFixed, EffectiveParents: finalMetric.EffectiveParents, Replicates: len(reps), GainStd: round4(stddev(gains)), DiversityStd: round4(stddev(divs)), InbreedingStd: round4(stddev(inbr)), ProbabilityInbreedingBreach: round4(float64(inbreedingBreaches) / float64(len(reps))), ProbabilityDiversityCollapse: round4(float64(diversityCollapses) / float64(len(reps))), ProbabilityRareUsefulLoss: round4(float64(rareLossEvents) / float64(len(reps)))}
+	final.GeneticGainSigma = finalMetric.GainSigma
+	final.MeanDeltaF, final.Ne = meanInbreedingRate(finalMetric.Inbreeding, finalMetric.Generation)
 	final.RecommendedNext = recommendationFor(cfg.Code, final)
 	return StrategyResult{Name: cfg.Name, Code: cfg.Code, Summary: cfg.Summary, Replicates: len(reps), Metrics: metrics, Final: final}
+}
+
+// meanInbreedingRate returns the per-generation rate of inbreeding that
+// takes founders (F = 0) to finalF in generations steps,
+// ΔF = 1 − (1 − F_T)^(1/T), and the effective size 1 / (2ΔF) it implies.
+func meanInbreedingRate(finalF float64, generations int) (deltaF, ne float64) {
+	if generations <= 0 || finalF <= 0 {
+		return 0, maxEffectiveNe
+	}
+	if finalF >= 1 {
+		return 1, round4(effectiveNeFromDeltaF(1))
+	}
+	deltaF = 1 - math.Pow(1-finalF, 1/float64(generations))
+	return round4(deltaF), round4(effectiveNeFromDeltaF(deltaF))
 }
 
 func annotateDecisionScores(results []StrategyResult) {
@@ -1142,7 +1270,14 @@ func annotateDecisionScores(results []StrategyResult) {
 	for i := range results {
 		ranks[i] = ranked{i, results[i].Final.RiskAdjustedScore}
 	}
+	// v0.8.0: the neutral and random baselines are reference points, not
+	// candidate programs — rank them after every selecting strategy so a
+	// harsh scenario can never recommend "do not select".
 	sort.Slice(ranks, func(i, j int) bool {
+		bi, bj := isBaselineStrategy(results[ranks[i].idx].Code), isBaselineStrategy(results[ranks[j].idx].Code)
+		if bi != bj {
+			return bj
+		}
 		if ranks[i].score == ranks[j].score {
 			return results[ranks[i].idx].Final.GeneticGain > results[ranks[j].idx].Final.GeneticGain
 		}
@@ -1152,6 +1287,8 @@ func annotateDecisionScores(results []StrategyResult) {
 		results[item.idx].Final.DecisionRank = rank + 1
 	}
 }
+func isBaselineStrategy(code string) bool { return code == "neutral" || code == "random" }
+
 func dominates(a, b FinalStats) bool {
 	betterOrEqual := a.GeneticGain >= b.GeneticGain && a.Diversity >= b.Diversity && a.Inbreeding <= b.Inbreeding && a.ProbabilityDiversityCollapse <= b.ProbabilityDiversityCollapse && a.ProbabilityRareUsefulLoss <= b.ProbabilityRareUsefulLoss
 	strictlyBetter := a.GeneticGain > b.GeneticGain || a.Diversity > b.Diversity || a.Inbreeding < b.Inbreeding || a.ProbabilityDiversityCollapse < b.ProbabilityDiversityCollapse || a.ProbabilityRareUsefulLoss < b.ProbabilityRareUsefulLoss
@@ -1235,8 +1372,17 @@ func buildDecisionSummary(req SimRequest, results []StrategyResult, baseDiversit
 	if len(results) == 0 {
 		return DecisionSummary{}
 	}
-	bestRiskIdx, bestGainIdx, lowestRiskIdx := 0, 0, 0
+	// v0.8.0: recommendations come from selecting strategies only;
+	// baselines stay in the table for comparison.
+	first := 0
+	for first < len(results)-1 && isBaselineStrategy(results[first].Code) {
+		first++
+	}
+	bestRiskIdx, bestGainIdx, lowestRiskIdx := first, first, first
 	for i := range results {
+		if isBaselineStrategy(results[i].Code) && !isBaselineStrategy(results[first].Code) {
+			continue
+		}
 		if results[i].Final.RiskAdjustedScore > results[bestRiskIdx].Final.RiskAdjustedScore {
 			bestRiskIdx = i
 		}
@@ -1257,7 +1403,7 @@ func buildDecisionSummary(req SimRequest, results []StrategyResult, baseDiversit
 	// v0.7.3: best feasible — top risk-adjusted score among strategies that pass user constraints.
 	bestFeasibleIdx := -1
 	for i := range results {
-		if !results[i].Final.Feasible {
+		if !results[i].Final.Feasible || (isBaselineStrategy(results[i].Code) && !isBaselineStrategy(results[first].Code)) {
 			continue
 		}
 		if bestFeasibleIdx == -1 || results[i].Final.RiskAdjustedScore > results[bestFeasibleIdx].Final.RiskAdjustedScore {
@@ -1288,7 +1434,9 @@ func buildDecisionSummary(req SimRequest, results []StrategyResult, baseDiversit
 	// FROH vs FGRM). Single-trait MVP — assumes the modelled trait IS
 	// milk yield; Issue 18 (multi-trait engine) will let multi-trait runs
 	// pick the right trait automatically.
-	if best.Final.Inbreeding > 0.01 {
+	// v0.8.0: only on dairy runs — a crop run must not be told its F costs
+	// "kg of milk".
+	if best.Final.Inbreeding > 0.01 && strings.EqualFold(req.Dataset, "holstein_synthetic") {
 		costLo := inbreedingDepressionCostMilkKg(best.Final.Inbreeding, holsteinDepressionMilkLowKgPerF)
 		costHi := inbreedingDepressionCostMilkKg(best.Final.Inbreeding, holsteinDepressionMilkHighKgPerF)
 		costDefault := inbreedingDepressionCostMilkKg(best.Final.Inbreeding, holsteinDepressionMilkDefaultKgPerF)
@@ -1343,8 +1491,15 @@ func buildTradeoffs(results []StrategyResult, best, bestGain, lowest StrategyRes
 				combinedRisk(lowest.Final), best.Final.GeneticGain-lowest.Final.GeneticGain),
 		})
 	}
-	if len(pareto) >= 2 {
-		a, b := findByCode(results, pareto[0]), findByCode(results, pareto[1])
+	// v0.8.0: baselines are not choices, so they never form the Pareto pair.
+	selecting := make([]string, 0, len(pareto))
+	for _, code := range pareto {
+		if !isBaselineStrategy(code) {
+			selecting = append(selecting, code)
+		}
+	}
+	if len(selecting) >= 2 {
+		a, b := findByCode(results, selecting[0]), findByCode(results, selecting[1])
 		if a != nil && b != nil {
 			out = append(out, Tradeoff{
 				A: a.Code, B: b.Code, Theme: "pareto_pair",
@@ -1407,7 +1562,8 @@ func buildKeyAssumptions(req SimRequest) []string {
 		founderStmt,
 		"Mock genomic-selection signal; production genomic prediction (GBLUP/Bayesian/ML) not yet integrated.",
 		"Additive trait architecture; no dominance or epistasis modelled.",
-		fmt.Sprintf("Heritability h² = %.2f and selection percent = %g%% applied uniformly across generations.", req.Heritability, req.SelectionPercent),
+		fmt.Sprintf("Heritability h² = %.2f in the founders with environmental variance fixed thereafter (realised h² falls as genetic variance erodes); selection percent = %g%% every generation.", req.Heritability, req.SelectionPercent),
+		"Linked genome: markers on chromosomes with a genetic map, Poisson crossovers (Haldane). Inbreeding F = identity by descent relative to the founder generation.",
 		fmt.Sprintf("Risk thresholds: inbreeding ≥ %.2f flagged as breach; diversity loss ≥ %.2f relative to baseline flagged as collapse.", req.InbreedingLimit, req.DiversityLossLimit),
 		"Discrete non-overlapping generations; cohort-based selection.",
 	}
@@ -1528,7 +1684,8 @@ func buildLimitations(req SimRequest) []string {
 	}
 	out := []string{
 		"Diploid biallelic markers; no copy-number variation, no structural variants.",
-		"Simplified Mendelian inheritance; recombination map is uniform, no chromosome structure.",
+		"Recombination follows a genetic map with Poisson crossovers (Haldane, no crossover interference); without dataset positions the map is synthetic (evenly spaced markers on equal-length chromosomes).",
+		"One random-mating outcrossing population with equal parent contributions: no selfing, doubled haploids, hybrids, sexes, overlapping generations, or trial stages; generations are not converted to years or cost.",
 		"Additive trait architecture only; no dominance, no epistasis, no pleiotropy.",
 		"No genotype-by-environment (GxE) interaction; trait expression treated as environment-invariant.",
 		"No production genomic-prediction model (GBLUP / Bayesian / ML); the predictor is a mock signal for demonstration only.",
@@ -1690,6 +1847,12 @@ func normalizeRequest(req *SimRequest) {
 	if req.DiversityLossLimit == 0 {
 		req.DiversityLossLimit = 0.30
 	}
+	if req.Chromosomes == 0 {
+		req.Chromosomes = defaultChromosomes
+	}
+	if req.ChromosomeLengthM == 0 {
+		req.ChromosomeLengthM = defaultChromosomeLengthM
+	}
 }
 func validateRequest(req SimRequest, strategyCount int) error {
 	if req.PopulationSize < 2 || req.PopulationSize > 5000 {
@@ -1705,7 +1868,23 @@ func validateRequest(req SimRequest, strategyCount int) error {
 		return errors.New("generations must be between 1 and 200")
 	}
 	if req.SelectionPercent <= 0 || req.SelectionPercent > 100 {
-		return errors.New("selection_percent must be in (0, 100]")
+		return fmt.Errorf("selection_percent must be in (0, 100] — it is a percent on a 0–100 scale (e.g. 20 for 20%%); got %g", req.SelectionPercent)
+	}
+	// v0.8.0 — Issue 34. A fraction such as 0.2 ("20%") is accepted by the
+	// range check above and silently selects 0.4 of 200 individuals. No
+	// real program selects under 1%, so reject the whole class with the fix.
+	if req.SelectionPercent < 1 {
+		return fmt.Errorf("selection_percent is a percent on a 0–100 scale (e.g. 20 for 20%%). Received %g, which selects %.2g of %d individuals. If you meant %g%%, send %g", req.SelectionPercent, float64(req.PopulationSize)*req.SelectionPercent/100.0, req.PopulationSize, req.SelectionPercent*100, req.SelectionPercent*100)
+	}
+	// Chromosome fields: 0 means "default" (normalizeRequest fills it in).
+	if req.Chromosomes < 0 || req.Chromosomes > maxChromosomes {
+		return fmt.Errorf("chromosomes must be between 1 and %d", maxChromosomes)
+	}
+	if req.ChromosomeLengthM < 0 || req.ChromosomeLengthM > 5 {
+		return errors.New("chromosome_length_morgans must be in (0, 5]")
+	}
+	if req.GenomicAccuracy < 0 || req.GenomicAccuracy > 1 {
+		return errors.New("genomic_accuracy must be in (0, 1]; 0 or omitted means √h²")
 	}
 	if req.Heritability <= 0 || req.Heritability > 1 {
 		return errors.New("heritability must be in (0, 1]")
@@ -1811,8 +1990,15 @@ func populateNeTrajectory(metrics []MetricPoint) {
 		return
 	}
 	metrics[0].Ne = maxEffectiveNe
+	metrics[0].DeltaF = 0
 	for i := 1; i < len(metrics); i++ {
+		// v0.8.0: rate of inbreeding relative to the remaining
+		// non-IBD fraction, not the raw difference.
 		dF := metrics[i].Inbreeding - metrics[i-1].Inbreeding
+		if prev := 1 - metrics[i-1].Inbreeding; prev > 1e-9 {
+			dF /= prev
+		}
+		metrics[i].DeltaF = round4(dF)
 		metrics[i].Ne = round4(effectiveNeFromDeltaF(dF))
 	}
 }
@@ -1863,20 +2049,22 @@ func makeInitialPopulation(n, markers int, rng *rand.Rand) []organism {
 func clonePopulation(pop []organism) []organism {
 	out := make([]organism, len(pop))
 	for i := range pop {
-		g := make([]uint8, len(pop[i].geno))
-		copy(g, pop[i].geno)
-		out[i] = organism{geno: g}
+		out[i] = organism{
+			geno:  append([]uint8(nil), pop[i].geno...),
+			phase: append([]uint64(nil), pop[i].phase...),
+			ibd:   append([]uint16(nil), pop[i].ibd...),
+		}
 	}
 	return out
 }
 
-func simulateStrategy(req SimRequest, cfg strategyConfig, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
+func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
-	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, 0))
+	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0))
 	for gen := 1; gen <= req.Generations; gen++ {
-		parents := selectParents(pop, effects, req, cfg, rng, gen)
-		pop = makeNextGeneration(pop, parents, req.Markers, req.MutationRate, rng, cfg.MatingRule)
-		metrics = append(metrics, computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, len(parents)))
+		parents := selectParents(pop, effects, req, cfg, model, rng, gen)
+		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
+		metrics = append(metrics, computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, len(parents)))
 		if progress != nil {
 			progress(gen, pop)
 		}
@@ -1888,7 +2076,7 @@ func simulateStrategy(req SimRequest, cfg strategyConfig, pop []organism, effect
 	return StrategyResult{Name: cfg.Name, Code: cfg.Code, Summary: cfg.Summary, Replicates: 1, Metrics: metrics, Final: final}
 }
 func finalMetricToFinal(m MetricPoint) FinalStats {
-	return FinalStats{TraitMean: m.TraitMean, GeneticGain: m.GeneticGain, Diversity: m.Diversity, Inbreeding: m.Inbreeding, AlleleDrift: m.AlleleDrift, RareUsefulLost: m.RareUsefulLost, FixedLoci: m.FixedLoci, FavorableFixed: m.FavorableFixed, UnfavorableFixed: m.UnfavorableFixed, EffectiveParents: m.EffectiveParents}
+	return FinalStats{TraitMean: m.TraitMean, GeneticGain: m.GeneticGain, GeneticGainSigma: m.GainSigma, Diversity: m.Diversity, Inbreeding: m.Inbreeding, AlleleDrift: m.AlleleDrift, RareUsefulLost: m.RareUsefulLost, FixedLoci: m.FixedLoci, FavorableFixed: m.FavorableFixed, UnfavorableFixed: m.UnfavorableFixed, EffectiveParents: m.EffectiveParents}
 }
 
 // v0.7.29 — Issue 08. `gen` is the generation being entered (1-indexed
@@ -1896,7 +2084,7 @@ func finalMetricToFinal(m MetricPoint) FinalStats {
 // to decide whether the gen-0 GEBV override is still meaningful
 // (only at the first call; later calls operate on offspring whose
 // ids are not in the predictions map).
-func selectParents(pop []organism, effects []float64, req SimRequest, cfg strategyConfig, rng *rand.Rand, gen int) []int {
+func selectParents(pop []organism, effects []float64, req SimRequest, cfg strategyConfig, model runModel, rng *rand.Rand, gen int) []int {
 	n := len(pop)
 	if cfg.Rule == "no_selection" {
 		parents := make([]int, n)
@@ -1921,11 +2109,19 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 	gvals := geneticValues(pop, effects)
 	meanG, varG := meanVar(gvals)
 	stdG := math.Sqrt(math.Max(varG, 1e-9))
-	varEnv := 0.0
-	if req.Heritability < 1.0 {
-		varEnv = varG * (1.0 - req.Heritability) / req.Heritability
+	// v0.8.0: VE and the genomic-prediction error variance are fixed at
+	// generation 0 (see runModel), not rescaled to the current VG.
+	stdEnv := math.Sqrt(model.varEnv)
+	stdGSErr := math.Sqrt(model.gsErrVar)
+	phenotypes := make([]float64, n)
+	for i := range phenotypes {
+		phenotypes[i] = gvals[i] + rng.NormFloat64()*stdEnv
 	}
-	stdEnv := math.Sqrt(math.Max(varEnv, 1e-9))
+	// Standardise the phenotype by its own SD so TraitWeight means the
+	// same thing at every h² and every generation (it was divided by σG,
+	// which inflated the trait term by 1/h relative to novelty).
+	meanP, varP := meanVar(phenotypes)
+	stdP := math.Sqrt(math.Max(varP, 1e-9))
 	novelties := make([]float64, n)
 	for i := range pop {
 		var novelty float64
@@ -1941,13 +2137,15 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 	stdN := math.Sqrt(math.Max(varN, 1e-9))
 	scored := make([]scoredIndividual, n)
 	for i := range pop {
-		phenotype := gvals[i] + rng.NormFloat64()*stdEnv
-		zTrait := (phenotype - meanG) / stdG
+		phenotype := phenotypes[i]
+		zTrait := (phenotype - meanP) / stdP
 		zNovelty := (novelties[i] - meanN) / stdN
 		genomicPred := gvals[i]
 		if cfg.Rule == "genomic" {
-			accuracy := math.Sqrt(math.Max(0.01, req.Heritability))
-			genomicPred = meanG + accuracy*(gvals[i]-meanG) + rng.NormFloat64()*stdG*(1.0-accuracy+0.10)
+			// Prediction = true breeding value + error with fixed
+			// variance; its correlation with the truth is exactly the
+			// configured accuracy at generation 0 and falls as VG erodes.
+			genomicPred = gvals[i] + rng.NormFloat64()*stdGSErr
 		}
 		// v0.7.29 — Issue 08. Imported-GEBV selection. Only at gen 1
 		// (the gen-0 selection cycle); later generations have lost
@@ -1982,8 +2180,7 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 				// fall back to internal genomic scoring (NOT phenotype,
 				// to keep the strategy genuinely "genomic selection"
 				// across the whole run).
-				accuracy := math.Sqrt(math.Max(0.01, req.Heritability))
-				fb := meanG + accuracy*(gvals[i]-meanG) + rng.NormFloat64()*stdG*(1.0-accuracy+0.10)
+				fb := gvals[i] + rng.NormFloat64()*stdGSErr
 				score = (fb - meanG) / stdG
 			}
 		default:
@@ -2063,25 +2260,20 @@ func genotypeSimilarity(a, b []uint8) float64 {
 	return sim / float64(len(a))
 }
 func genotypeDistance(a, b []uint8) float64 { return 1.0 - genotypeSimilarity(a, b) }
-func makeNextGeneration(pop []organism, parents []int, markers int, mutationRate float64, rng *rand.Rand, matingRule string) []organism {
+// makeNextGeneration produces len(pop) offspring. v0.8.0: each parent
+// contributes one recombinant gamete drawn along the genetic map
+// (genomeMap.transmit), carrying phase and IBD labels with the alleles.
+func makeNextGeneration(pop []organism, parents []int, gm *genomeMap, mutationRate float64, rng *rand.Rand, matingRule string) []organism {
 	n := len(pop)
 	next := make([]organism, n)
+	xo := make([]float64, 0, 16)
 	for i := 0; i < n; i++ {
 		p1 := parents[rng.Intn(len(parents))]
 		p2 := chooseSecondParent(pop, parents, p1, rng, matingRule)
-		g := make([]uint8, markers)
-		for m := 0; m < markers; m++ {
-			a := drawGamete(pop[p1].geno[m], rng)
-			b := drawGamete(pop[p2].geno[m], rng)
-			if mutationRate > 0 && rng.Float64() < mutationRate {
-				a = 1 - a
-			}
-			if mutationRate > 0 && rng.Float64() < mutationRate {
-				b = 1 - b
-			}
-			g[m] = a + b
-		}
-		next[i] = organism{geno: g}
+		child := gm.newOrganism()
+		gm.transmit(&pop[p1], &child, 0, mutationRate, rng, xo)
+		gm.transmit(&pop[p2], &child, 1, mutationRate, rng, xo)
+		next[i] = child
 	}
 	return next
 }
@@ -2117,35 +2309,23 @@ func chooseSecondParent(pop []organism, parents []int, p1 int, rng *rand.Rand, m
 	}
 	return parents[0]
 }
-func drawGamete(genotype uint8, rng *rand.Rand) uint8 {
-	switch genotype {
-	case 0:
-		return 0
-	case 2:
-		return 1
-	default:
-		if rng.Intn(2) == 0 {
-			return 0
-		}
-		return 1
-	}
-}
 
-func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, effectiveParents int) MetricPoint {
+// computeMetrics summarises one generation. v0.8.0: Inbreeding is IBD
+// coancestry relative to the founders (ibdCoancestry), no longer
+// 1 − He/He₀ — that quantity is the diversity loss, reported separately.
+func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean, sigmaA0 float64, rareUsefulAtStart []int, effectiveParents int) MetricPoint {
 	freq := alleleFreq(pop, len(effects))
 	div := diversityFromFreq(freq)
 	trait := meanGeneticValue(pop, effects)
 	drift := meanAbsDiff(freq, baseFreq)
 	fixed, favorableFixed, unfavorableFixed := fixationStats(freq, effects)
-	inbreeding := 0.0
-	if baseDiversity > 0 {
-		inbreeding = 1.0 - div/baseDiversity
-	}
-	if inbreeding < 0 {
-		inbreeding = 0
+	inbreeding := ibdCoancestry(pop)
+	gainSigma := 0.0
+	if sigmaA0 > 0 {
+		gainSigma = (trait - baseMean) / sigmaA0
 	}
 	lost := countRareUsefulLost(freq, rareUsefulAtStart)
-	return MetricPoint{Generation: gen, TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
+	return MetricPoint{Generation: gen, TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
 }
 func fixationStats(freq []float64, effects []float64) (fixed, favorableFixed, unfavorableFixed int) {
 	for i, p := range freq {

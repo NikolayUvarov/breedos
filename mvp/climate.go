@@ -257,6 +257,7 @@ func applyClimatePenaltyToMetricsWithDiscount(metrics []MetricPoint, scenario *C
 	for i := range metrics {
 		metrics[i].TraitMean = round4(metrics[i].TraitMean * factor)
 		metrics[i].GeneticGain = round4(metrics[i].GeneticGain * factor)
+		metrics[i].GainSigma = round4(metrics[i].GainSigma * factor)
 	}
 }
 

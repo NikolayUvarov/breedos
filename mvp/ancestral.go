@@ -57,21 +57,26 @@ func seedAncestralLines(pop []organism, introPercent float64, markers int, rng *
 	}
 	startIdx := len(pop) - count
 	for i := startIdx; i < len(pop); i++ {
-		geno := make([]uint8, markers)
+		// v0.8.0: the line keeps the slot's founder IBD labels and gets
+		// a phase from its two draws (first = strand A, second = strand B).
+		o := organism{geno: make([]uint8, markers), phase: make([]uint64, phaseWords(markers)), ibd: pop[i].ibd}
 		for m := 0; m < markers; m++ {
 			// Two independent Bernoulli draws per locus (diploid) with
 			// P(carry favourable allele) = AncestralAlleleBias. Genotype
 			// values are 0/1/2 as in the rest of the simulator.
-			var v uint8
-			if rng.Float64() < AncestralAlleleBias {
-				v++
+			a := rng.Float64() < AncestralAlleleBias
+			b := rng.Float64() < AncestralAlleleBias
+			if a {
+				o.geno[m]++
 			}
-			if rng.Float64() < AncestralAlleleBias {
-				v++
+			if b {
+				o.geno[m]++
+				if !a {
+					o.setPhaseBit(m)
+				}
 			}
-			geno[m] = v
 		}
-		pop[i] = organism{geno: geno}
+		pop[i] = o
 	}
 }
 

@@ -544,6 +544,7 @@ tr.row-infeasible td:first-child strong { text-decoration: line-through; text-de
   font-size: 13px;
   color: #e7d4b8;
 }
+.decision-degenerate-banner { border-left-color: #ff6b6b; background: rgba(255,107,107,0.12); color: #ffd0d0; font-weight: 600; }
 .decision-what-could-be-wrong { border-color: rgba(255,180,90,0.45); background: rgba(255,180,90,0.08); }
 .decision-what-could-be-wrong summary { color: #ffb45a; }
 .decision-limitations { border-color: rgba(94,167,255,0.32); background: rgba(94,167,255,0.05); }

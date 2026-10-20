@@ -3,18 +3,46 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BreedOS — движок принятия решений по стратегиям отбора в селекции с CRISPR</title>
-  <meta name="description" content="BreedOS — движок принятия решений для искусственного отбора и селекции с CRISPR-редактированием. Сравнивает стратегии отбора на горизонте многих поколений поверх геномного предсказания.">
+  <title>BreedOS — цена стратегии отбора на 10–40 поколений вперёд</title>
+  <meta name="description" content="BreedOS моделирует 10–40 поколений селекции и показывает цену стратегии отбора: генетический прогресс против инбридинга F, эффективной численности Ne и потери редких аллелей. Модель со сцеплением и инбридингом по идентичности по происхождению.">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
+  <style>
+    .hero-ru h1 { font-size: clamp(34px, 5.2vw, 60px); line-height: 1.02; letter-spacing: -0.05em; }
+    .hero-ru .lede { font-size: clamp(17px, 1.8vw, 21px); }
+    .hook-card { padding: 18px 18px 14px; min-width: 0; }
+    .hook-card .chart-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+    .hook-card .chart-head strong { letter-spacing: -0.02em; }
+    .hook-legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+    .hook-legend i { display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+    #hook-chart { display: block; width: 100%; height: auto; }
+    #hook-chart .grid { stroke: var(--line); stroke-width: 1; }
+    #hook-chart .axis-label { fill: var(--muted); font-size: 13px; }
+    #hook-chart .end-label { font-size: 14px; font-weight: 800; }
+    .hook-caption { margin: 8px 0 0; font-size: 15px; color: var(--text); line-height: 1.5; }
+    .hook-params { margin: 6px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+    .who h3 { font-size: 21px; }
+    .who p { margin: 0 0 10px; }
+    .who .try { font-size: 13.5px; color: var(--accent); margin: 0; }
+    .inside-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+    .inside-grid h3 { color: var(--accent); font-size: 15px; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .inside-grid ul.clean, .limits ul.clean { margin: 6px 0 0; }
+    .limits ul.clean li strong { color: var(--text); font-weight: 700; }
+    .limits .invite { margin: 16px 0 0; color: var(--warn); font-weight: 700; font-size: 17px; }
+    .section.tight { padding: 40px 0; }
+    .feedback h2 { margin-bottom: 10px; }
+    .author { font-size: 14.5px; margin: 18px 0 0; }
+    @media (max-width: 980px) { .inside-grid { grid-template-columns: 1fr; } }
+  </style>
 </head>
 <body>
   <nav class="nav">
     <a class="logo" href="/ru">Breed<span>OS</span></a>
     <div class="navlinks">
-      <a href="#problem">Проблема</a>
-      <a href="#solution">Решение</a>
-      <a href="#crispr">Слой CRISPR</a>
+      <a href="#who">Кому</a>
+      <a href="#inside">Модель</a>
+      <a href="#limits">Ограничения</a>
+      <a href="/datasets">Данные</a>
       <a href="/demo">Демо</a>
       <span class="lang-switcher" aria-label="Язык">
         <a href="/">EN</a> ·
@@ -26,132 +54,208 @@
   </nav>
 
   <main>
-    <section class="hero wrap">
+    <section class="hero hero-ru wrap">
       <div class="hero-grid">
         <div>
-          <div class="kicker">Движок принятия решений по стратегиям отбора в селекции с CRISPR</div>
-          <h1>Система управления для селекции.</h1>
+          <div class="kicker">Симулятор стратегий отбора · 10–40 поколений вперёд</div>
+          <h1>Отбор, который выигрывает первые 20&nbsp;поколений, может проиграть следующие&nbsp;20.</h1>
           <p class="lede">
-            BreedOS помогает селекционерам и биоинженерам выбирать, что скрещивать, что редактировать и что сохранять — без потери долгосрочного генетического разнообразия.
+            Селекция расходует генетическое разнообразие, на котором держится будущий прогресс. BreedOS моделирует 10–40 поколений вперёд и показывает цену стратегии отбора — генетический прогресс против инбридинга F, эффективной численности Ne и потери редких аллелей — до того, как вы её запустили.
           </p>
           <div class="actions">
-            <a class="btn primary" href="/demo">Запустить MVP-демо</a>
-            <a class="btn" href="https://github.com/NikolayUvarov/breedos">Открыть на GitHub</a>
+            <a class="btn primary" href="/demo">Открыть демо — 30 секунд</a>
+            <a class="btn" href="https://github.com/NikolayUvarov/breedos">Исходный код</a>
           </div>
-          <p class="lang-note">Демо и Decision Report — на английском. Локализован только посадочный лендинг.</p>
-          <div class="badge-row">
-            <span class="badge">геномная селекция</span>
-            <span class="badge">эволюционная симуляция</span>
-            <span class="badge">дрейф / инбридинг</span>
-            <span class="badge">селекция с CRISPR</span>
-            <span class="badge">планирование на много поколений</span>
-          </div>
+          <p class="lang-note">Интерфейс демо и отчёт — на английском; параметры (N, h², % отбора, поколения) понятны без перевода.</p>
         </div>
-        <div class="card visual" aria-label="Схема продукта BreedOS">
-          <div class="orbit"></div>
-          <div class="orbit"></div>
-          <div class="orbit"></div>
-          <div class="node n1"></div>
-          <div class="node n2"></div>
-          <div class="node n3"></div>
-          <div class="node n4"></div>
-          <div class="center-badge">
-            <div>
-              <strong>BreedOS</strong>
-              <small>стратегия отбора на будущие поколения</small>
+
+        <figure class="card hook-card" style="margin:0">
+          <div class="chart-head">
+            <strong>Генетический прогресс, σA основателей</strong>
+            <div class="hook-legend" aria-hidden="true">
+              <span><i style="background:var(--warn)"></i>агрессивный отбор</span>
+              <span><i style="background:var(--accent)"></i>сбалансированная стратегия</span>
             </div>
           </div>
-        </div>
+          <svg id="hook-chart" viewBox="0 0 600 340" role="img" aria-label="Траектории генетического прогресса двух стратегий отбора по поколениям"></svg>
+          <figcaption>
+            <p class="hook-caption" id="hook-caption"></p>
+            <p class="hook-params" id="hook-params"></p>
+          </figcaption>
+        </figure>
       </div>
     </section>
 
-    <section id="problem" class="section wrap">
-      <div class="grid2">
-        <div>
-          <h2>В селекции стало много данных, но решения принимать всё так же трудно.</h2>
-          <p>
-            Селекционные команды генерируют геномные данные, фенотипы, полевые испытания, родословные, данные о среде и всё чаще — данные о генном редактировании. Но ключевое решение по-прежнему сложно: что скрестить, что отредактировать, что сохранить, и что произойдёт через 10 или 20 поколений?
-          </p>
-        </div>
-        <div class="card">
-          <div class="quote">
-            Селекция — это не только задача предсказания. На более глубоком уровне это задача управления эволюционирующей популяцией на горизонте многих поколений.
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <section id="solution" class="section wrap">
-      <h2>BreedOS — это слой принятия решений.</h2>
-      <div class="grid3">
-        <div class="card mini">
-          <h3>Цифровой двойник отбора</h3>
-          <p>Симулирует генетический прирост, дрейф аллельных частот, потерю разнообразия, инбридинг, узкие места и оптимальность будущих решений по отбору.</p>
-        </div>
-        <div class="card mini">
-          <h3>Планировщик геномной селекции <small>(roadmap)</small></h3>
-          <p>Будет ранжировать кандидатов в родители, сравнивать скрещивания и подбирать стратегии отбора с учётом долгосрочных ограничений. Производственная интеграция — в плане программы.</p>
-        </div>
-        <div class="card mini">
-          <h3>Слой стратегии CRISPR</h3>
-          <p>Расставляет приоритеты кандидатов на редактирование и проверяет, какая комбинация — правка, скрещивание или их сочетание — даёт лучшую траекторию популяции.</p>
-        </div>
-      </div>
-    </section>
-
-    <section id="crispr" class="section wrap">
+    <section class="section tight wrap">
       <div class="card">
-        <h2>CRISPR — это ограниченная, но мощная функция «записи» в геном. BreedOS решает, что именно писать.</h2>
-        <p>
-          BreedOS не проектирует guide-РНК, не считает off-target-эффекты, не даёт лабораторных протоколов — это покрывают Benchling, Synthego, CRISPResso и смежные инструменты. BreedOS показывает продуктовый слой над ними: планирование отбора с учётом редактирований. Кандидаты на правку ранжируются по ожидаемому эффекту на признак, текущей частоте аллеля и логике популяционных рисков; выбранные правки можно засеять в симулированную популяцию и распространить через сбалансированный отбор.
-        </p>
-        <div class="flow" style="margin-top:18px">
-          <div class="card mini"><strong>Чтение</strong><p>Генотипы, фенотипы, родословные, среда, варианты-кандидаты.</p></div>
-          <div class="arrow">→</div>
-          <div class="card mini"><strong>Решение</strong><p>Скрестить, отредактировать, сохранить, отклонить или удержать как резерв разнообразия.</p></div>
-          <div class="arrow">→</div>
-          <div class="card mini"><strong>Управление</strong><p>Симулировать траекторию популяции до того, как тратить ресурсы.</p></div>
+        <div class="quote">
+          Селекция — это не только задача предсказания. На более глубоком уровне это задача управления эволюционирующей популяцией на горизонте многих поколений.
         </div>
       </div>
     </section>
 
-    <section id="pitch" class="section wrap">
-      <div class="grid2">
-        <div class="card">
-          <h2>Питч в одну строку</h2>
-          <p class="lede">
-            BreedOS — движок принятия решений для искусственного отбора. Помогает селекционным командам оптимизировать генетический прирост на горизонте поколений, не теряя разнообразие, без которого невозможны дальнейшие улучшения.
-          </p>
+    <section id="who" class="section wrap">
+      <h2>Кому и зачем</h2>
+      <div class="grid3 who">
+        <div class="card mini">
+          <h3>Генетику</h3>
+          <p>Проверить интуицию о дрейфе, Ne и плато отбора на модели со сцеплением: как быстро истощается VG, когда наследуемость падает и где отбор перестаёт работать.</p>
+          <p class="try">В демо: «Neutral drift» против «Aggressive» на 40 поколений.</p>
         </div>
-        <div class="card">
-          <h2>Почему сейчас</h2>
+        <div class="card mini">
+          <h3>Селекционеру</h3>
+          <p>Сравнить стратегии отбора и подбора пар под ограничения по F и ΔF до запуска программы — в том числе для признаков климатической устойчивости: засухо-, жаро- и солеустойчивости.</p>
+          <p class="try">В демо: задайте max inbreeding и посмотрите, что останется допустимым.</p>
+        </div>
+        <div class="card mini">
+          <h3>Биотехнологу</h3>
+          <p>Решение «редактировать / скрещивать / ждать» для кандидатных аллелей и предварительная классификация NGT-1 / NGT-2 по Annex I регламента ЕС — инструмент планирования, не юридическое заключение. Guide-РНК и off-target — это Benchling, Synthego, CRISPResso.</p>
+          <p class="try">В демо: включите CRISPR и раздел NGT.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="inside" class="section wrap">
+      <h2>Что внутри (v0.8.0)</h2>
+      <div class="inside-grid">
+        <div class="card mini">
+          <h3>Генетическая модель</h3>
           <ul class="clean">
-            <li>Секвенирование сделало биологические популяции читаемыми.</li>
-            <li>CRISPR и precision breeding сделали биологию записываемой.</li>
-            <li>ИИ и дешёвые вычисления делают возможными многопоколенные системы принятия биологических решений.</li>
-            <li>Узкое место сместилось с генерации данных на интеллект принятия решений.</li>
+            <li>Хромосомы и генетическая карта, кроссинговер по Haldane, фазированные гаплотипы.</li>
+            <li>Инбридинг F — по идентичности по происхождению (IBD) относительно основателей, а не по гетерозиготности маркеров.</li>
+            <li>Средовая дисперсия фиксирована с поколения 0: наследуемость падает по мере истощения VG.</li>
+            <li>Прогресс — в единицах σA основателей; ΔF и Ne на каждое поколение.</li>
+          </ul>
+        </div>
+        <div class="card mini">
+          <h3>Слой решений</h3>
+          <ul class="clean">
+            <li>Monte Carlo повторы, Pareto-фронт «прогресс × риск», ограничения по F, ΔF, разнообразию и числу родителей.</li>
+            <li>Анализ чувствительности: держится ли рекомендация при других h², % отбора, сценариях.</li>
+            <li>Загрузка своих генотипов (CSV 0/1/2) и публичные наборы — Arabidopsis 1001, пшеница.</li>
+            <li>Каждый отчёт перечисляет допущения и то, что может быть неверно.</li>
           </ul>
         </div>
       </div>
     </section>
 
-    <section class="section wrap">
+    <section id="limits" class="section wrap limits">
       <div class="card">
-        <h2>Стартовый плацдарм</h2>
+        <h2>Чего BreedOS пока не делает</h2>
+        <ul class="clean">
+          <li><strong>Время и деньги:</strong> поколения не переведены в годы и стоимость цикла.</li>
+          <li><strong>Структура программы:</strong> нет самоопыления, DH, гибридов и стадий испытаний.</li>
+          <li><strong>Среда:</strong> нет взаимодействия генотип × среда (G×E).</li>
+          <li><strong>Животные:</strong> нет полов и перекрывающихся поколений.</li>
+          <li><strong>Предсказание:</strong> нет реальной GBLUP-модели — сейчас mock с заданной точностью.</li>
+          <li><strong>Ваши данные:</strong> генотипы используются, фенотипы — пока нет.</li>
+        </ul>
+        <p class="invite">Если вы видите здесь ошибку модели — именно это я и хочу услышать.</p>
+      </div>
+    </section>
+
+    <section id="feedback" class="section wrap feedback">
+      <div class="card">
+        <h2>Нужны 15–20 минут вашей критики</h2>
         <p>
-          Селекционные команды в растениеводстве и аграрной биотехнологии, работающие над климато-устойчивыми признаками: засухоустойчивость, жароустойчивость, устойчивость к болезням, устойчивость к засолению, стабильность урожая, эффективность использования ресурсов.
+          Запустите демо на параметрах, похожих на вашу программу, и скажите, где модель расходится с реальностью. Ещё ценнее — обезличенный набор генотипов, на котором можно проверить выводы.
         </p>
         <div class="actions">
-          <a class="btn primary" href="/demo">Запустить симулятор отбора</a>
-          <a class="btn" href="https://github.com/NikolayUvarov/breedos">Открыть на GitHub</a>
+          <a class="btn primary" href="https://github.com/NikolayUvarov/breedos/issues/new">Оставить замечание (GitHub Issues)</a>
+          <a class="btn" href="/demo">Открыть демо</a>
+          <a class="btn" href="/datasets">Публичные наборы данных</a>
         </div>
-        <p class="lang-note">Симулятор и Decision Report — на английском.</p>
+        <p class="author">Автор — Николай Уваров. Тезис BreedOS вырос из ранней академической работы по математическому моделированию дрейфа генов при искусственном отборе.</p>
       </div>
     </section>
   </main>
 
   <footer class="footer">
-    <div class="wrap">BreedOS MVP v0.7.39 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
+    <div class="wrap">BreedOS MVP v0.8.0 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
   </footer>
+
+  <!-- Chart data: BreedOS v0.8.0 engine output (POST /api/simulate, core strategy set,
+       seed 7, N=100, markers 1000, qtl_count 50, generations 40, selection_percent 10,
+       heritability 0.25, replicates 20). Caption and labels are derived from it. -->
+  <script id="hook-data" type="application/json">
+{"generations": [0, 5, 10, 15, 20, 25, 30, 35, 40], "aggressive": {"gain_sigma": [0, 3.12, 4.77, 5.39, 5.77, 5.97, 6.07, 6.13, 6.15], "final_f": 0.93, "final_ne": 8}, "balanced": {"gain_sigma": [0, 2.5, 4.02, 4.97, 5.62, 6.05, 6.41, 6.63, 6.78], "final_f": 0.62, "final_ne": 21}, "params": "N=100, 1000 маркеров на 10 хромосомах, 50 QTL, h²=0,25, 10% отбора, 20 повторов, seed 7"}
+  </script>
+  <script>
+  (function () {
+    var src = document.getElementById('hook-data');
+    var svg = document.getElementById('hook-chart');
+    if (!src || !svg) return;
+    var d;
+    try { d = JSON.parse(src.textContent); } catch (e) { return; }
+    var gens = d.generations, A = d.aggressive.gain_sigma, B = d.balanced.gain_sigma;
+    if (!gens || !A || !B || gens.length < 2) return;
+
+    var NS = 'http://www.w3.org/2000/svg';
+    var W = 600, H = 340, L = 44, R = 92, T = 16, BOT = 40;
+    var minX = gens[0], maxX = gens[gens.length - 1];
+    var maxY = Math.max.apply(null, A.concat(B)), minY = Math.min(0, Math.min.apply(null, A.concat(B)));
+    var span = maxY - minY;
+    var step = span > 16 ? 4 : span > 8 ? 2 : span > 4 ? 1 : 0.5;
+    var top = Math.ceil(maxY / step) * step, bottom = Math.floor(minY / step) * step;
+    if (top === bottom) top = bottom + step;
+    function x(v) { return L + (v - minX) / (maxX - minX) * (W - L - R); }
+    function y(v) { return T + (top - v) / (top - bottom) * (H - T - BOT); }
+    function fmt(v, digits) { return v.toFixed(digits).replace('.', ','); }
+    function el(name, attrs, text) {
+      var n = document.createElementNS(NS, name);
+      for (var k in attrs) n.setAttribute(k, attrs[k]);
+      if (text !== undefined) n.textContent = text;
+      svg.appendChild(n);
+      return n;
+    }
+
+    for (var v = bottom; v <= top + 1e-9; v += step) {
+      el('line', { 'class': 'grid', x1: L, x2: W - R, y1: y(v), y2: y(v) });
+      el('text', { 'class': 'axis-label', x: L - 8, y: y(v) + 4, 'text-anchor': 'end' }, fmt(v, step < 1 ? 1 : 0));
+    }
+    var every = gens.length > 9 ? 2 : 1;
+    gens.forEach(function (g, i) {
+      if (i % every === 0 || i === gens.length - 1) {
+        el('text', { 'class': 'axis-label', x: x(g), y: H - BOT + 20, 'text-anchor': 'middle' }, String(g));
+      }
+    });
+    el('text', { 'class': 'axis-label', x: (L + W - R) / 2, y: H - 4, 'text-anchor': 'middle' }, 'поколение');
+
+    function series(vals, color, f) {
+      var pts = vals.map(function (v, i) { return x(gens[i]) + ',' + y(v); }).join(' ');
+      el('polyline', { points: pts, fill: 'none', style: 'stroke:' + color, 'stroke-width': 3.5, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' });
+      vals.forEach(function (v, i) { el('circle', { cx: x(gens[i]), cy: y(v), r: 3.5, style: 'fill:' + color }); });
+      return { y: y(vals[vals.length - 1]), color: color, f: f };
+    }
+    var ea = series(A, 'var(--warn)', d.aggressive.final_f);
+    var eb = series(B, 'var(--accent)', d.balanced.final_f);
+    // End labels: final F per strategy, nudged apart if the lines finish close together.
+    var ends = [ea, eb].sort(function (p, q) { return p.y - q.y; });
+    if (ends[1].y - ends[0].y < 20) { ends[0].y -= (20 - (ends[1].y - ends[0].y)) / 2; ends[1].y = ends[0].y + 20; }
+    ends.forEach(function (e) {
+      el('text', { 'class': 'end-label', x: W - R + 10, y: e.y + 5, style: 'fill:' + e.color }, 'F = ' + fmt(e.f, 2));
+    });
+
+    var cross = -1;
+    for (var i = 1; i < gens.length; i++) { if (B[i] > A[i]) { cross = i; break; } }
+    var fA = fmt(d.aggressive.final_f, 2), fB = fmt(d.balanced.final_f, 2);
+    var neNote = (d.aggressive.final_ne && d.balanced.final_ne)
+      ? ' (Ne ≈ ' + d.balanced.final_ne + ' против ' + d.aggressive.final_ne + ')' : '';
+    var last = gens.length - 1, caption;
+    if (cross > 1) {
+      caption = 'Агрессивный отбор лидирует до ' + gens[cross - 1] + '-го поколения, но к ' + gens[cross] +
+        '-му сбалансированная стратегия его обгоняет — и заканчивает с инбридингом F = ' + fB + ' против ' + fA + neNote + '.';
+    } else if (cross === 1) {
+      caption = 'Сбалансированная стратегия впереди уже с ' + gens[1] + '-го поколения и заканчивает с инбридингом F = ' + fB + ' против ' + fA + '.';
+    } else {
+      caption = 'На этом горизонте агрессивный отбор впереди на ' + fmt(A[last] - B[last], 1) +
+        ' σA, но платит инбридингом F = ' + fA + ' против ' + fB + '.';
+    }
+    document.getElementById('hook-caption').textContent = caption;
+    document.getElementById('hook-params').textContent = 'Модель BreedOS, ' + d.params +
+      '. Прогресс — в σA основателей; F — по идентичности по происхождению. Повторите в демо.';
+    svg.setAttribute('aria-label', caption);
+  })();
+  </script>
 </body>
 </html>

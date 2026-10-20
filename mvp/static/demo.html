@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.7.39 — constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.0 — linked genome · IBD inbreeding · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -71,6 +71,7 @@
               <option value="synthetic" selected>Synthetic (generated)</option>
               <option value="arabidopsis1001">Arabidopsis 1001 (subset)</option>
               <option value="wheat_t3">Wheat (T3 / CerealsDB)</option>
+              <option value="holstein_synthetic">Holstein-shaped synthetic (dairy)</option>
               <option value="__upload__">Uploaded CSVs (your data)</option>
             </select>
           </div>
@@ -159,7 +160,7 @@
               <span>Selection intensity <span class="tip" tabindex="0" data-tip="Percent of the population selected as the base parent pool. Lower values mean stronger selection pressure and usually faster gain with higher bottleneck risk.">?</span></span>
               <span>% parents</span>
             </label>
-            <input id="selection_percent" type="number" min="0.1" max="100" step="0.5" value="10">
+            <input id="selection_percent" type="number" min="1" max="100" step="0.5" value="10">
           </div>
 
           <div class="field">
@@ -578,7 +579,7 @@
                   <th>Score</th>
                   <th>Final gain ±σ</th>
                   <th>Diversity ±σ</th>
-                  <th>Inbreeding ±σ</th>
+                  <th>Inbreeding F (IBD) ±σ · ΔF · Ne</th>
                   <th>Risk</th>
                   <th>P(inb/div/loss)</th>
                   <th>Fixed loci</th>

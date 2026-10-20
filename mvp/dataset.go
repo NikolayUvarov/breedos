@@ -27,6 +27,13 @@ import (
 // Values are 0/1/2 (allele dose per locus, diploid biallelic).
 // Rows are individual accessions; columns after the ID are SNP markers.
 //
+// v0.8.0 — marker positions. When the file carries them, the simulator
+// builds its genetic map from them instead of a synthetic one. Two forms
+// are recognised: the comment line the tools/data fetch scripts write
+// right after "# Sites (chrom:pos), ...", or marker header labels that are
+// themselves "chrom:pos" (e.g. "chr1:12345"). Markers must be ordered by
+// chromosome and position.
+//
 // Lookup order for a request like dataset=arabidopsis1001:
 //   1. <bindir>/data/arabidopsis1001.csv          (external — operator-deployed)
 //   2. embedded data/arabidopsis1001.csv           (only if explicitly included via //go:embed)
@@ -49,6 +56,7 @@ type loadedDataset struct {
 	sourceFile    string
 	sourceNotes   []string
 	external      bool
+	sites         []markerSite // v0.8.0: physical positions, nil when the file has none.
 }
 
 var datasetCache = struct {
@@ -145,6 +153,7 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 	headerSeen := false
 	var headerCols int
 	lineNum := 0
+	expectSites := false
 	for scanner.Scan() {
 		lineNum++
 		line := strings.TrimSpace(scanner.Text())
@@ -156,6 +165,16 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 				out.isPlaceholder = true
 			}
 			note := strings.TrimSpace(strings.TrimPrefix(line, "#"))
+			if expectSites {
+				// The site list can hold tens of thousands of entries; it
+				// feeds the genetic map and is kept out of sourceNotes.
+				expectSites = false
+				out.sites = parseSiteList(strings.Split(note, ","))
+				continue
+			}
+			if strings.HasPrefix(note, "Sites (chrom:pos)") {
+				expectSites = true
+			}
 			if note != "" {
 				out.sourceNotes = append(out.sourceNotes, note)
 			}
@@ -169,6 +188,9 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 				return nil, fmt.Errorf("dataset %s: header has fewer than 2 columns", sourceFile)
 			}
 			out.markerCount = headerCols - 1
+			if out.sites == nil {
+				out.sites = parseSiteList(fields[1:])
+			}
 			continue
 		}
 		if len(fields) != headerCols {
@@ -194,13 +216,18 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 	if len(out.individuals) == 0 {
 		return nil, fmt.Errorf("dataset %s: no individuals after header", sourceFile)
 	}
+	if len(out.sites) != out.markerCount {
+		out.sites = nil
+	}
 	return out, nil
 }
 
 // subsampleDataset samples up to n accessions without replacement and up to m
-// markers (taking the first m columns deterministically — markers are
-// typically pre-ordered by the fetch script). The returned dataset is a deep
-// copy; the input is not mutated and can stay in the package-level cache.
+// markers. v0.8.0: markers are taken at an even stride across all columns
+// (order preserved) instead of the first m, so a run on a genome-ordered
+// file covers every chromosome rather than the start of the first one. The
+// returned dataset is a deep copy; the input is not mutated and can stay in
+// the package-level cache.
 func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDataset {
 	if ds == nil {
 		return nil
@@ -221,9 +248,21 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 		individuals:   make([]organism, n),
 		accessionIDs:  make([]string, n),
 	}
+	cols := make([]int, m)
+	for k := range cols {
+		cols[k] = k * ds.markerCount / m
+	}
+	if ds.sites != nil {
+		out.sites = make([]markerSite, m)
+		for k, c := range cols {
+			out.sites[k] = ds.sites[c]
+		}
+	}
 	for i, src := range idx {
 		geno := make([]uint8, m)
-		copy(geno, ds.individuals[src].geno[:m])
+		for k, c := range cols {
+			geno[k] = ds.individuals[src].geno[c]
+		}
 		out.individuals[i] = organism{geno: geno}
 		out.accessionIDs[i] = ds.accessionIDs[src]
 	}

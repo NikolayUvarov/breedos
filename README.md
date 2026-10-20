@@ -14,23 +14,42 @@ BreedOS makes these dynamics visible and comparable across strategies.
 
 ## What it does
 
-The MVP runs Monte Carlo simulations across eleven selection strategies:
+BreedOS runs Monte Carlo simulations of a breeding population under competing selection strategies and compares where each one leaves the population after 10–40+ generations: genetic gain, inbreeding, effective population size, diversity, fixation, and rare favourable alleles lost.
 
-- **Neutral drift baseline** — no intentional selection; isolates drift, fixation, and mutation effects.
-- **Aggressive selection** — maximizes short-term trait gain; useful as a warning baseline.
-- **Diversity-preserving selection** — keeps genetically unusual candidates in the parent pool.
-- **Balanced strategy** — default trade-off between near-term gain and long-term optionality.
-- **Balanced + CRISPR seed** — edit-aware integration on a balanced background (CRISPR-enabled runs).
-- **Random parent baseline** — randomly selects parents; separates selection value from drift noise.
-- **Phenotype truncation selection** — classic truncation on noisy phenotype.
-- **Genomic selection mock** — placeholder for GBLUP/Bayesian/ML predictors.
-- **OCS-like constrained selection** — gain pursued under a similarity/diversity penalty.
-- **Cross planner** — balanced parent choice plus more distant mating pairs.
-- **Edit-aware introgression planner** — seeds lower-risk candidate edits through diversity-aware propagation (CRISPR-enabled runs).
+### Genetic model (v0.8.0)
 
-Each run computes per-generation genetic gain, allele-frequency drift, inbreeding coefficient, diversity loss, and rare-allele tracking. Results are aggregated across replicates with worker-pool concurrency, scored on a risk-adjusted decision rank, and presented as a Pareto frontier on genetic gain × combined risk.
+- **Linked genome.** Markers sit on chromosomes with a genetic map in Morgans. Each meiosis draws Poisson crossovers per chromosome (Haldane map, no interference), and individuals carry phased haplotypes, so linkage disequilibrium, hitchhiking and linkage drag emerge from the model. The synthetic map defaults to 10 chromosomes × 1 M. Datasets that carry marker positions use their real chromosomes.
+- **Inbreeding by descent.** Every founder haplotype is labelled at up to 512 tracker loci. F is the probability that two allele copies in the population are identical by descent (IBD) relative to the founders, so selecting on observed marker state cannot lower it. Diversity (expected heterozygosity) is reported separately.
+- **Fixed environment.** Environmental variance is set once from h² and the founder genetic variance. As selection erodes VG, realised heritability, and with it the accuracy of phenotypic selection, falls.
+- **Interpretable units.** Gain is reported in trait units and in founder-σA units. ΔF per generation and Ne = 1/(2ΔF) are reported for every strategy.
+- Additive QTL effects; optional multi-trait selection indices with genetic correlations.
 
-Core mode runs a four-strategy subset for fast comparison; advanced mode runs the full eleven.
+### Strategies
+
+- **Neutral drift** and **random parents**: baselines. They are shown for comparison and never recommended.
+- **Aggressive / phenotype truncation**: maximum short-term gain.
+- **Diversity-preserving**, **balanced**, **OCS-like** (gain under a similarity penalty), **cross planner** (distant mating pairs).
+- **Genomic selection mock**: prediction with a configurable accuracy (`genomic_accuracy`, default √h²) that decays as VG erodes. A placeholder for GBLUP / Bayesian / ML predictors.
+- **Imported GEBV**: generation-0 parents ranked by breeding values from your own rrBLUP / BGLR / sommer / AlphaSimR pipeline.
+- **CRISPR-enabled**: balanced + CRISPR seed and edit-aware introgression. Candidate edits are classified edit / cross / wait, with an EU NGT-1 / NGT-2 planning classification under Annex I (not legal advice).
+- **Ancestral introgression** for climate-stress scenarios.
+
+### Decision layer
+
+- Replicates are aggregated with a worker pool and scored on a risk-adjusted rank.
+- The Pareto frontier is shown on gain × combined risk, with N-D dominance for multi-trait runs.
+- Hard constraints (max F, max diversity loss, min gain, min parents, max risk) select the best feasible strategy.
+- A sensitivity sweep asks: does the recommendation hold across h², selection %, weights, or climate scenarios?
+- Every report lists its assumptions, model limitations, and what could make the recommendation wrong. A floored parent pool is flagged as a degenerate run.
+
+Core mode runs a four-strategy subset (plus the CRISPR strategy when enabled); advanced mode runs the full set.
+
+### What it does not model yet
+
+- **Time and cost.** Generations are not converted to years or cost per cycle, so the main real-world advantage of genomic selection (a shorter cycle) is not visible.
+- **Breeding-program structure.** There is no selfing, doubled haploids, hybrids or trial stages, no sexes and no overlapping generations.
+- **Genotype × environment interaction.** Climate stress is a uniform penalty on the trait mean.
+- **Prediction and phenotypes.** There is no production GBLUP model, and uploaded phenotypes and pedigrees are parsed but not yet used by the engine.
 
 ## CRISPR positioning
 
@@ -40,7 +59,7 @@ BreedOS is a **decision layer** for CRISPR-enabled breeding: which candidate edi
 
 ## Status
 
-Early prototype. Working simulation engine, interactive demo UI, programmatic JSON API. Active development. Feedback from breeders, computational biologists, and CRISPR researchers is genuinely welcome — open an issue.
+Early prototype (v0.8.0). Working simulation engine with a linked genome and IBD inbreeding, interactive demo UI, programmatic JSON API. Active development. Feedback from breeders, computational biologists, and CRISPR researchers is genuinely welcome — open an issue.
 
 ## Quickstart
 
@@ -56,8 +75,9 @@ Then open `http://127.0.0.1:8080/`.
 
 ### Demo pages
 
-- `/` — landing page
+- `/` — landing page (`/ru`, `/es`, `/uz` — translations)
 - `/demo` — interactive simulation UI
+- `/datasets` — public genotype datasets registry
 
 ## Run as a systemd service
 
@@ -98,31 +118,55 @@ To inspect the unit file and recent logs without root: `./install.sh info`. To r
 ## API
 
 - `GET  /health` — health check
+- `GET  /api/version` — build version
 - `POST /api/simulate` — synchronous full run
 - `POST /api/simulate/start` — async start (returns job ID)
 - `GET  /api/simulate/status?id=<id>` — async poll
+- `POST /api/sensitivity/start`, `GET /api/sensitivity/status?id=<id>` — sensitivity sweep
+- `POST /api/upload` — ephemeral genotype / phenotype / pedigree / edits / predictions CSV upload
+- `GET  /api/datasets` — dataset registry
 
-Request and response shapes live in the handler types at the top of `mvp/main.go`.
+Minimal request (omitted fields take defaults):
+
+```json
+{
+  "seed": 7,
+  "population_size": 100,
+  "markers": 1000,
+  "qtl_count": 50,
+  "generations": 40,
+  "selection_percent": 10,
+  "heritability": 0.25,
+  "strategy_set": "core",
+  "replicates": 20
+}
+```
+
+`selection_percent` is a percent on a 0–100 scale (`20` = 20%). Values below 1 are rejected. Optional genome fields: `chromosomes` (default 10), `chromosome_length_morgans` (default 1.0), `genomic_accuracy` (default √h²). Request and response shapes live in the handler types at the top of `mvp/main.go`.
+
+Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages. Marker positions are read from a `# Sites (chrom:pos), ...` comment line followed by `# chrom:pos, chrom:pos, ...`, or from `chrom:pos` header labels. Markers must be ordered by chromosome and position.
 
 ## Project structure
 
 ```
 breedos/
-├── README.md         (this file)
+├── README.md
 ├── CHANGELOG.md
 ├── LICENSE
-├── .gitignore
-├── install.sh        systemd service installer (Linux)
+├── install.sh            systemd service installer (Linux)
+├── deploy_breedos.sh     build + ship to a host running the self-update watcher
 └── mvp/
-    ├── build.sh        portable static build (CGO_ENABLED=0)
-    ├── go.mod
-    ├── main.go         simulation engine + HTTP server
-    ├── main_test.go    tests
-    └── static/         frontend (vanilla JS, no framework)
-        ├── index.html
-        ├── demo.html
-        ├── style.css
-        └── app.js
+    ├── build.sh          portable static build (CGO_ENABLED=0)
+    ├── go.mod            no external dependencies
+    ├── main.go           HTTP server, strategies, selection, decision report
+    ├── genome.go         genetic map, meiosis with crossovers, IBD tracking
+    ├── multitrait.go     multi-trait selection indices
+    ├── sensitivity.go    sensitivity sweeps
+    ├── climate*.go, ancestral.go     climate-stress scenarios
+    ├── edit_classifier.go, ngt_classify.go   edit / cross / wait, EU NGT classification
+    ├── dataset.go, upload.go, datasets_api.go  founder data loading
+    ├── promptbio/        separate experimental substrate; not used by the breeding engine
+    └── static/           frontend (vanilla JS, no framework)
 ```
 
 ## Tests

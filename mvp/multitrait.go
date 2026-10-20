@@ -15,7 +15,8 @@ package main
 //
 //   2. Per-organism per-trait genetic value g_t = Σ_m geno[m] · e[t][m].
 //      Phenotype p_t = g_t + N(0, σ_E²) where σ_E² is the environmental
-//      variance derived from h²[t] and the population variance of g_t.
+//      variance derived from h²[t] and the founder variance of g_t, fixed
+//      from generation 0 on (v0.8.0; it used to track the current VG).
 //
 //   3. Selection index I_i = Σ_t w_t · (p_{t,i} − mean_t) / sd_t.
 //      Truncation select the top fraction by I.
@@ -223,10 +224,29 @@ func selectionIndex(phen [][]float64, traits []TraitConfig) []float64 {
 	return idx
 }
 
+// multiTraitModel is the multi-trait counterpart of runModel: one
+// environmental variance and founder σA per trait (v0.8.0).
+type multiTraitModel struct {
+	genome  *genomeMap
+	varEnv  []float64
+	sigmaA0 []float64
+}
+
+func newMultiTraitModel(gm *genomeMap, founders []organism, effects [][]float64, traits []TraitConfig) multiTraitModel {
+	mm := multiTraitModel{genome: gm, varEnv: make([]float64, len(traits)), sigmaA0: make([]float64, len(traits))}
+	gv := geneticValuesMultiTrait(founders, effects)
+	for t := range traits {
+		_, varG0 := meanVar(gv[t])
+		mm.varEnv[t] = environmentalVariance(varG0, traits[t].Heritability)
+		mm.sigmaA0[t] = math.Sqrt(varG0)
+	}
+	return mm
+}
+
 // selectParentsMultiTrait selects parent indices by truncation on the
 // weighted index. Honours strategy rule for the "no_selection" and
 // "random" special cases (consistent with single-trait behaviour).
-func selectParentsMultiTrait(pop []organism, effects [][]float64, traits []TraitConfig, req SimRequest, cfg strategyConfig, rng *rand.Rand) ([]int, []float64) {
+func selectParentsMultiTrait(pop []organism, effects [][]float64, traits []TraitConfig, req SimRequest, cfg strategyConfig, mm multiTraitModel, rng *rand.Rand) ([]int, []float64) {
 	n := len(pop)
 	if cfg.Rule == "no_selection" {
 		parents := make([]int, n)
@@ -247,17 +267,13 @@ func selectParentsMultiTrait(pop []organism, effects [][]float64, traits []Trait
 		perm := rng.Perm(n)
 		return append([]int(nil), perm[:parentCount]...), make([]float64, n)
 	}
-	// Per-trait phenotype = genetic value + environmental noise scaled by h².
+	// Per-trait phenotype = genetic value + environmental noise with the
+	// variance fixed at generation 0.
 	gvals := geneticValuesMultiTrait(pop, effects)
 	T := len(traits)
 	phen := make([][]float64, T)
 	for t := 0; t < T; t++ {
-		_, varG := meanVar(gvals[t])
-		varEnv := 0.0
-		if traits[t].Heritability < 1.0 && traits[t].Heritability > 0 {
-			varEnv = varG * (1.0 - traits[t].Heritability) / traits[t].Heritability
-		}
-		stdEnv := math.Sqrt(math.Max(varEnv, 1e-12))
+		stdEnv := math.Sqrt(mm.varEnv[t])
 		phen[t] = make([]float64, n)
 		for i := 0; i < n; i++ {
 			phen[t][i] = gvals[t][i] + rng.NormFloat64()*stdEnv
@@ -276,7 +292,7 @@ func selectParentsMultiTrait(pop []organism, effects [][]float64, traits []Trait
 
 // simulateMultiTraitStrategy runs one strategy × replicate trajectory.
 // Per-trait metrics are computed alongside the aggregate MetricPoint.
-func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, pop []organism, effects [][]float64, traits []TraitConfig, baseFreq []float64, baseDiversity float64, baseMeansPerTrait []float64, rareUsefulAtStart []int, rng *rand.Rand) StrategyResult {
+func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTraitModel, pop []organism, effects [][]float64, traits []TraitConfig, baseFreq []float64, baseDiversity float64, baseMeansPerTrait []float64, rareUsefulAtStart []int, rng *rand.Rand) StrategyResult {
 	T := len(traits)
 	// Aggregate metric path uses the first trait as the "headline" trait
 	// (consistent with how a single-trait run reports gain). Per-trait
@@ -293,11 +309,11 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, pop []organi
 
 	appendGen := func(gen int, eff int) {
 		// Aggregate metric on trait 0 (headline).
-		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, rareUsefulAtStart, eff))
+		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, mm.sigmaA0[0], rareUsefulAtStart, eff))
 		// Per-trait MetricPoints — we only need a small subset for charts,
 		// reuse computeMetrics with per-trait effects + baseline.
 		for t := 0; t < T; t++ {
-			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], rareUsefulAtStart, eff))
+			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], mm.sigmaA0[t], rareUsefulAtStart, eff))
 		}
 	}
 	populateNeOnAggregate := func() {
@@ -309,7 +325,7 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, pop []organi
 
 	appendGen(0, 0)
 	for gen := 1; gen <= req.Generations; gen++ {
-		parents, idx := selectParentsMultiTrait(pop, effects, traits, req, cfg, rng)
+		parents, idx := selectParentsMultiTrait(pop, effects, traits, req, cfg, mm, rng)
 		var meanIdx float64
 		if len(parents) > 0 && len(idx) > 0 {
 			for _, p := range parents {
@@ -318,7 +334,7 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, pop []organi
 			meanIdx /= float64(len(parents))
 		}
 		indexHistory = append(indexHistory, round4(meanIdx))
-		pop = makeNextGeneration(pop, parents, req.Markers, req.MutationRate, rng, cfg.MatingRule)
+		pop = makeNextGeneration(pop, parents, mm.genome, req.MutationRate, rng, cfg.MatingRule)
 		appendGen(gen, len(parents))
 	}
 	populateNeOnAggregate()
@@ -445,6 +461,9 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 		return SimResponse{}, fmt.Errorf("genetic_correlations Cholesky: %w", err)
 	}
 	effects := makeMultiTraitEffects(req.Markers, req.Traits, L, rng)
+	gm := buildGenomeMap(req, datasetMeta)
+	initFounders(initial, gm, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset)))
+	mm := newMultiTraitModel(gm, initial, effects, req.Traits)
 
 	baseFreq := alleleFreq(initial, req.Markers)
 	baseDiversity := diversityFromFreq(baseFreq)
@@ -466,7 +485,7 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 		for r := 0; r < req.Replicates; r++ {
 			pop := clonePopulation(initial)
 			subRng := rand.New(rand.NewSource(req.Seed + int64(si*req.Replicates+r+1)))
-			res := simulateMultiTraitStrategy(req, cfg, pop, effects, req.Traits, baseFreq, baseDiversity, baseMeans, rareUsefulAtStart, subRng)
+			res := simulateMultiTraitStrategy(req, cfg, mm, pop, effects, req.Traits, baseFreq, baseDiversity, baseMeans, rareUsefulAtStart, subRng)
 			reps[cfg.Code] = append(reps[cfg.Code], res)
 			done++
 			if done%5 == 0 || done == totalJobs {
@@ -547,7 +566,7 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 	}
 
 	reportProgress(progress, 98, "building response")
-	notes := buildNotes(req, len(strategies), baseDiversity, datasetMeta)
+	notes := buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm)
 	notes = append(notes, fmt.Sprintf("Multi-trait MVP (Issue 18): %d traits with weighted selection-index truncation. OCS-like with similarity penalty is not implemented in the multi-trait path yet — strategies map to index-based truncation regardless of Rule (except no_selection and random).", T))
-	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: notes}, nil
+	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: notes, DegenerateRun: degenerateParentPool(req)}, nil
 }
