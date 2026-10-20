@@ -58,7 +58,10 @@ type uploadedGenotype struct {
 	Individuals int      `json:"individuals"`
 	Markers     int      `json:"markers"`
 	SampleIDs   []string `json:"sample_ids"`                  // first up to 5 ids for the import summary.
-	dataset     *loadedDataset                                 // not JSON-serialised; the simulator entry point.
+	// v0.8.9. SSR import summary (format, loci, alleles, imputed calls);
+	// Markers then counts allele indicators.
+	Loci    *ssrInfo       `json:"loci,omitempty"`
+	dataset *loadedDataset // not JSON-serialised; the simulator entry point.
 }
 
 type uploadedPhenotype struct {
@@ -185,6 +188,7 @@ func parseUploadGenotype(raw []byte) (*uploadedGenotype, error) {
 		Individuals: len(ds.individuals),
 		Markers:     ds.markerCount,
 		SampleIDs:   sample,
+		Loci:        ds.ssr,
 		dataset:     ds,
 	}, nil
 }
@@ -619,7 +623,7 @@ func uploadFixtureHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/upload-fixture/")
 	switch name {
-	case "genotype.csv", "phenotype.csv", "pedigree.csv", "edits.csv", "predictions.csv":
+	case "genotype.csv", "genotype_ssr.csv", "phenotype.csv", "pedigree.csv", "edits.csv", "predictions.csv":
 		// ok — v0.7.29 added predictions.csv to the allowlist.
 	default:
 		http.NotFound(w, r)

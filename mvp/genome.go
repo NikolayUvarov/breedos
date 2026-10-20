@@ -63,6 +63,9 @@ type genomeMap struct {
 	trackers   []int     // marker indices carrying IBD labels, ascending
 	trackerOf  []int32   // per-marker tracker slot, -1 when the marker is not tracked
 	source     string    // human-readable origin of the map, surfaced in the run notes
+	// v0.8.9 — multi-allelic loci (ssr.go): indicator markers share their
+	// locus' position and are never mutated.
+	layout *locusLayout
 }
 
 func phaseWords(markers int) int { return (markers + 63) / 64 }
@@ -189,12 +192,57 @@ func buildGenomeMap(req SimRequest, ds *loadedDataset) *genomeMap {
 	if lengthM <= 0 {
 		lengthM = defaultChromosomeLengthM
 	}
+	if ds != nil && ds.layout != nil && ds.layout.markers() == req.Markers {
+		return buildLocusGenomeMap(ds.layout, chromosomes, lengthM)
+	}
 	if ds != nil && len(ds.sites) == req.Markers {
 		if gm := buildGenomeMapFromSites(ds.sites, lengthM); gm != nil {
 			return gm
 		}
 	}
 	return buildSyntheticGenomeMap(req.Markers, chromosomes, lengthM)
+}
+
+// buildLocusGenomeMap is the synthetic map for multi-allelic data: loci
+// are spread evenly over the chromosomes and every indicator of a locus
+// sits at the locus' position, so meiosis never separates its alleles.
+func buildLocusGenomeMap(l *locusLayout, chromosomes int, lengthM float64) *genomeMap {
+	loci := l.loci()
+	if chromosomes > loci {
+		chromosomes = loci
+	}
+	if chromosomes < 1 {
+		chromosomes = 1
+	}
+	markers := l.markers()
+	gm := &genomeMap{
+		markers:    markers,
+		chromStart: make([]int, chromosomes+1),
+		posM:       make([]float64, markers),
+		lengthM:    make([]float64, chromosomes),
+		layout:     l,
+		source:     fmt.Sprintf("synthetic map for %d multi-allelic loci on %d chromosome(s) × %.2f M (no positions in the file; loci spread evenly, alleles of a locus at one position)", loci, chromosomes, lengthM),
+	}
+	for c := 0; c <= chromosomes; c++ {
+		firstLocus := c * loci / chromosomes
+		if firstLocus < loci {
+			gm.chromStart[c] = l.start[firstLocus]
+		} else {
+			gm.chromStart[c] = markers
+		}
+	}
+	for c := 0; c < chromosomes; c++ {
+		gm.lengthM[c] = lengthM
+		lo, hi := c*loci/chromosomes, (c+1)*loci/chromosomes
+		for li := lo; li < hi; li++ {
+			pos := (float64(li-lo) + 0.5) / float64(hi-lo) * lengthM
+			for a := range l.alleles[li] {
+				gm.posM[l.start[li]+a] = pos
+			}
+		}
+	}
+	gm.placeTrackers()
+	return gm
 }
 
 func (gm *genomeMap) placeTrackers() {
@@ -267,7 +315,7 @@ func (gm *genomeMap) transmit(parent, child *organism, s int, mutationRate float
 				next++
 			}
 			a := parent.allele(m, strand)
-			if mutationRate > 0 && rng.Float64() < mutationRate {
+			if mutationRate > 0 && !gm.layout.isIndicator(m) && rng.Float64() < mutationRate {
 				a = 1 - a
 			}
 			child.geno[m] += a

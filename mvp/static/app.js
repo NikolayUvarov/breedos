@@ -666,7 +666,12 @@ function renderAll(data, prev) {
   drawNeChart('chart_ne', 'legend_ne', data, prev);
   drawMetricChart('chart_drift', 'legend_drift', data, prev, 'allele_drift', 'Allele drift');
   drawMetricChart('chart_lost', 'legend_lost', data, prev, 'rare_useful_lost', 'Rare useful loci lost');
-  drawMetricChart('chart_fixed', 'legend_fixed', data, prev, 'fixed_loci', 'Fixed loci');
+  // v0.8.9: SSR runs plot allelic richness in place of fixed loci.
+  const ssrRun = !!data.loci;
+  if (byId('chart_fixed_title')) byId('chart_fixed_title').textContent = ssrRun ? 'SSR alleles retained' : 'Fixed loci';
+  if (byId('chart_fixed_hint')) byId('chart_fixed_hint').textContent = ssrRun ? 'alleles still present across all SSR loci — lost alleles do not come back' : 'rapid fixation becomes obvious in tiny populations';
+  if (ssrRun) drawMetricChart('chart_fixed', 'legend_fixed', data, prev, 'alleles_retained', 'SSR alleles retained');
+  else drawMetricChart('chart_fixed', 'legend_fixed', data, prev, 'fixed_loci', 'Fixed loci');
   // v0.7.22 — Issue 23. Multi-trait Pareto axis controls.
   refreshParetoAxisControls(data);
   drawParetoChart('chart_pareto', data);
@@ -962,7 +967,7 @@ function renderStrategyTable(strategies, prev) {
         <td>${formatInt(s.final.decision_rank)}</td>
         <td>${fmt(s.final.risk_adjusted_score)}</td>
         <td>${fmt(s.final.genetic_gain)}<br><span>±${fmt(s.final.gain_std)} · ${fmt(s.final.genetic_gain_sigma)} σA${s.final.years ? ` · ${fmt(s.final.gain_sigma_per_year)} σA/yr` : ''}</span></td>
-        <td>${fmt(s.final.diversity)}<br><span>±${fmt(s.final.diversity_std)}</span></td>
+        <td>${fmt(s.final.diversity)}<br><span>±${fmt(s.final.diversity_std)}${s.final.alleles_at_start ? ` · alleles ${s.final.alleles_retained}/${s.final.alleles_at_start}` : ''}</span></td>
         <td>${fmt(s.final.inbreeding)}<br><span>±${fmt(s.final.inbreeding_std)} · ΔF ${(100 * (Number(s.final.mean_delta_f) || 0)).toFixed(2)}% · Ne ${formatInt(Math.round(Number(s.final.ne) || 0))}</span></td>
         <td>${fmt(combinedRisk(s.final))}</td>
         <td>${fmt(s.final.probability_inbreeding_breach)} / ${fmt(s.final.probability_diversity_collapse)} / ${fmt(s.final.probability_rare_useful_loss)}</td>
@@ -2161,7 +2166,13 @@ function renderUploadSummary(summary, id) {
   if (!el) return;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const parts = [];
-  if (summary.genotype) {
+  if (summary.genotype && summary.genotype.loci) {
+    const l = summary.genotype.loci;
+    parts.push('<div><strong>Genotype (SSR, ' + esc(l.format) + ')</strong>: ' + summary.genotype.individuals + ' individuals × ' + l.loci + ' loci, ' + l.alleles + ' alleles (' + l.min_alleles_per_locus + '–' + l.max_alleles_per_locus + ' per locus), observed heterozygosity ' + (100 * l.observed_heterozygosity).toFixed(1) + '%'
+      + (l.imputed_calls ? ', ' + l.imputed_calls + ' of ' + l.total_calls + ' calls missing (imputed from allele frequencies)' : '')
+      + (l.dropped_monomorphic && l.dropped_monomorphic.length ? ', monomorphic loci dropped: ' + l.dropped_monomorphic.map(esc).join(', ') : '')
+      + ' (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
+  } else if (summary.genotype) {
     parts.push('<div><strong>Genotype</strong>: ' + summary.genotype.individuals + ' individuals × ' + summary.genotype.markers + ' markers (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
   }
   if (summary.phenotype) {

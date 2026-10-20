@@ -80,6 +80,22 @@ func seedAncestralLines(pop []organism, introPercent float64, markers int, rng *
 	}
 }
 
+// ancestralCount is how many founders the ancestral seeding replaces (the
+// last K of the population), matching seedAncestralLines.
+func ancestralCount(n int, introPercent float64) int {
+	if introPercent <= 0 || n == 0 {
+		return 0
+	}
+	if introPercent > AncestralIntroPercentMax {
+		introPercent = AncestralIntroPercentMax
+	}
+	count := int(math.Round(float64(n) * introPercent / 100.0))
+	if count > n {
+		count = n
+	}
+	return count
+}
+
 // climateDiscountForStrategy returns the per-strategy multiplier
 // applied to the climate penalty in aggregateReplicates. For strategies
 // without ancestral seeding this is 1.0 (no discount, climate penalty

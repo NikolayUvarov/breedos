@@ -152,6 +152,8 @@ type SimResponse struct {
 	// the estimate's diagnostics accompany the latter.
 	EffectsSource  string                 `json:"effects_source"`
 	EffectEstimate *EffectEstimateSummary `json:"effect_estimate,omitempty"`
+	// v0.8.9. Present when the founders are multi-allelic (SSR) data.
+	Loci *ssrInfo `json:"loci,omitempty"`
 }
 
 type DecisionSummary struct {
@@ -245,6 +247,8 @@ type MetricPoint struct {
 	DeltaF    float64 `json:"delta_f"`
 	// v0.8.4 — Issue 35. Calendar year of this generation (time axis on).
 	Year float64 `json:"year,omitempty"`
+	// v0.8.9. Alleles still present on multi-allelic (SSR) loci.
+	AllelesRetained int `json:"alleles_retained,omitempty"`
 }
 
 type FinalStats struct {
@@ -281,6 +285,10 @@ type FinalStats struct {
 	Years            float64 `json:"years,omitempty"`
 	GainSigmaPerYear float64 `json:"gain_sigma_per_year,omitempty"`
 	DeltaFPerYear    float64 `json:"delta_f_per_year,omitempty"`
+	// v0.8.9. Allelic richness on multi-allelic (SSR) loci: alleles in the
+	// founders and alleles still present at the end.
+	AllelesAtStart  int `json:"alleles_at_start,omitempty"`
+	AllelesRetained int `json:"alleles_retained,omitempty"`
 }
 
 type EditCandidate struct {
@@ -863,13 +871,24 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		initial = makeInitialPopulation(req.PopulationSize, req.Markers, rng)
 	}
 
+	// v0.8.9. A small dataset (e.g. a dozen SSR loci) can hold fewer
+	// markers than the requested QTL count; makeEffects needs distinct
+	// markers, so the count is reduced and the run notes say so.
+	qtlRequested := req.QTLCount
+	if req.QTLCount > req.Markers {
+		req.QTLCount = req.Markers / 4
+		if req.QTLCount < 1 {
+			req.QTLCount = 1
+		}
+	}
 	effects := makeEffects(req.Markers, req.QTLCount, rng)
 	// v0.8.6 — Issue 37. Uploaded phenotypes replace the synthetic QTL
 	// with SNP-BLUP effects at the simulation's marker columns.
 	effectsSource := "synthetic_qtl"
 	var effectEstimate *EffectEstimateSummary
 	if upload != nil {
-		est, sum, err := effectsFromUpload(upload, strideColumns(upload.Genotype.dataset.markerCount, req.Markers), req.Heritability, rand.New(rand.NewSource(req.Seed+effectsSeedOffset)))
+		cols, _ := subsampleColumns(upload.Genotype.dataset, req.Markers)
+		est, sum, err := effectsFromUpload(upload, cols, req.Heritability, rand.New(rand.NewSource(req.Seed+effectsSeedOffset)))
 		if err != nil {
 			return SimResponse{}, fmt.Errorf("estimate marker effects from the uploaded phenotype: %w", err)
 		}
@@ -901,10 +920,23 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		gxe.founderRG = round4(pearson(geneticValues(initial, effects), geneticValues(initial, gxe.stress)))
 	}
 	baseFreq := alleleFreq(initial, req.Markers)
-	baseDiversity := diversityFromFreq(baseFreq)
+	baseDiversity := diversityOf(baseFreq, gm.layout)
 	baseMean := meanGeneticValue(initial, metricEffects)
 	rareUsefulAtStart := rareUsefulLoci(baseFreq, metricEffects)
-	candidates := rankEditCandidates(baseFreq, editScaleEffects(metricEffects, effectEstimate != nil), req.CrisprEdits, baseDiversity)
+	candidates := rankEditCandidates(baseFreq, withoutIndicators(editScaleEffects(metricEffects, effectEstimate != nil), gm.layout), req.CrisprEdits, baseDiversity)
+	// v0.8.9. Without an edit target (e.g. SSR-only data, where alleles are
+	// not edit targets) the CRISPR strategies would be balanced selection
+	// under a misleading name; drop them and say so.
+	crisprSkipped := false
+	if req.CrisprEnabled && req.CrisprEdits > 0 && len(candidates) == 0 {
+		kept := strategies[:0:0]
+		for _, cfg := range strategies {
+			if !cfg.UseCrisprSeed {
+				kept = append(kept, cfg)
+			}
+		}
+		strategies, crisprSkipped = kept, true
+	}
 	// v0.7.29 — Issue 08. Patch the imported-GEBV slice onto the
 	// imported_gebv strategy entry (if present). Computed once from
 	// the upload's accession IDs; aligned with the gen-0 population.
@@ -935,6 +967,30 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	decision.EditDecisions = summarizeEditDecisions(candidates)
 	reportProgress(progress, 98, "building response")
 	notes := buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm)
+	if crisprSkipped {
+		notes = append(notes, "CRISPR strategies skipped: the founder data has no biallelic marker to edit (SSR alleles are not edit targets).")
+	}
+	if req.QTLCount != qtlRequested {
+		notes = append(notes, fmt.Sprintf("qtl_count reduced from %d to %d: the founder data has only %d markers.", qtlRequested, req.QTLCount, req.Markers))
+	}
+	var lociInfo *ssrInfo
+	if gm.layout != nil && datasetMeta != nil && datasetMeta.ssr != nil {
+		info := *datasetMeta.ssr
+		lociInfo = &info
+		used := fmt.Sprintf("all %d", info.Loci)
+		if gm.layout.loci() < info.Loci {
+			used = fmt.Sprintf("%d of %d (whole loci, even stride; raise markers to use more)", gm.layout.loci(), info.Loci)
+		}
+		imputed := ""
+		if info.ImputedCalls > 0 {
+			imputed = fmt.Sprintf(" %.1f%% of locus calls were missing and were drawn from the locus allele frequencies.", 100*float64(info.ImputedCalls)/float64(info.TotalCalls))
+		}
+		source := "Trait effects sit on SSR alleles as proxies for linked QTL."
+		if effectEstimate != nil {
+			source = "Trait effects are estimated from your phenotypes on the SSR alleles."
+		}
+		notes = append(notes, fmt.Sprintf("Multi-allelic markers (%s): %s SSR loci used, %d alleles (%d–%d per locus in the file). Each allele is an indicator marker inherited as a unit with its locus. Diversity is Nei's expected heterozygosity per locus; alleles_retained counts alleles still present.%s %s", info.Format, used, gm.markers, info.MinAlleles, info.MaxAlleles, imputed, source))
+	}
 	if lineBreeding(req) {
 		how := "one doubled-haploid step (fully homozygous lines)"
 		if req.MatingSystem == matingSSD {
@@ -956,7 +1012,31 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		notes = append(notes, fmt.Sprintf("Trait architecture from your data: SNP-BLUP effects for %q on %d phenotyped lines%s × %d markers (h² assumed %.2f, λ = %.4g). %d-fold cross-validated predictive ability r = %.2f, accuracy ≈ %.2f. Forward simulation treats these shrunken estimates as the true effects, so genetic variance and response are understated where accuracy is low. Gain is in the phenotype's units.", e.Trait, e.Phenotyped, sub, e.Markers, e.HeritabilityAssumed, e.Lambda, e.Folds, e.CVPredictiveAbility, e.CVAccuracyApprox))
 		decision.KeyAssumptions = append(decision.KeyAssumptions, fmt.Sprintf("Marker effects estimated from the uploaded phenotype by SNP-BLUP (CV accuracy ≈ %.2f), not synthetic QTL.", e.CVAccuracyApprox))
 	}
-	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: notes, DegenerateRun: degenerateParentPool(req), EffectsSource: effectsSource, EffectEstimate: effectEstimate}, nil
+	if lociInfo != nil {
+		decision.Interpretation = append(decision.Interpretation, alleleRetentionLine(results))
+	}
+	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: notes, DegenerateRun: degenerateParentPool(req), EffectsSource: effectsSource, EffectEstimate: effectEstimate, Loci: lociInfo}, nil
+}
+
+// alleleRetentionLine summarises allelic richness across strategies.
+func alleleRetentionLine(results []StrategyResult) string {
+	best, worst := -1, -1
+	for i, r := range results {
+		if isBaselineStrategy(r.Code) {
+			continue
+		}
+		if best < 0 || r.Final.AllelesRetained > results[best].Final.AllelesRetained {
+			best = i
+		}
+		if worst < 0 || r.Final.AllelesRetained < results[worst].Final.AllelesRetained {
+			worst = i
+		}
+	}
+	if best < 0 {
+		return ""
+	}
+	b, w := results[best], results[worst]
+	return fmt.Sprintf("SSR allelic richness: %s keeps %d of %d alleles; %s keeps %d. Alleles lost from a closed population do not come back without new germplasm.", b.Name, b.Final.AllelesRetained, b.Final.AllelesAtStart, w.Name, w.Final.AllelesRetained)
 }
 
 // effectsSeedOffset separates the cross-validation fold RNG from the run
@@ -1275,6 +1355,13 @@ func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfi
 					} else {
 						seedAncestralLines(strategyPop, req.AncestralIntroPercent, req.Markers, ancRNG)
 					}
+					// v0.8.9: per-marker re-rolls break one-hot SSR loci; redraw
+					// them from the founder allele frequencies.
+					if layout := model.genome.layout; layout != nil {
+						for i := len(strategyPop) - ancestralCount(len(strategyPop), req.AncestralIntroPercent); i < len(strategyPop); i++ {
+							resampleMultiallelic(&strategyPop[i], layout, baseFreq, ancRNG)
+						}
+					}
 				}
 				taskModel, taskSel := model, selEffects
 				if task.Config.SelectInTargetEnv && gxe != nil {
@@ -1374,9 +1461,10 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	metricCount := len(reps[0].Metrics)
 	metrics := make([]MetricPoint, metricCount)
 	for genIdx := 0; genIdx < metricCount; genIdx++ {
-		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents float64
+		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles float64
 		for _, rep := range reps {
 			p := rep.Metrics[genIdx]
+			alleles += float64(p.AllelesRetained)
 			trait += p.TraitMean
 			gain += p.GeneticGain
 			gainSigma += p.GainSigma
@@ -1390,7 +1478,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 			parents += float64(p.EffectiveParents)
 		}
 		den := float64(len(reps))
-		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
+		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
 	}
 	// v0.7.20 — Issue 20. Fill in Ne[t] = 1 / (2 ΔF) over the metrics slice.
 	populateNeTrajectory(metrics)
@@ -1429,6 +1517,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	finalMetric := metrics[len(metrics)-1]
 	final := FinalStats{TraitMean: finalMetric.TraitMean, GeneticGain: finalMetric.GeneticGain, Diversity: finalMetric.Diversity, Inbreeding: finalMetric.Inbreeding, AlleleDrift: finalMetric.AlleleDrift, RareUsefulLost: finalMetric.RareUsefulLost, FixedLoci: finalMetric.FixedLoci, FavorableFixed: finalMetric.FavorableFixed, UnfavorableFixed: finalMetric.UnfavorableFixed, EffectiveParents: finalMetric.EffectiveParents, Replicates: len(reps), GainStd: round4(stddev(gains)), DiversityStd: round4(stddev(divs)), InbreedingStd: round4(stddev(inbr)), ProbabilityInbreedingBreach: round4(float64(inbreedingBreaches) / float64(len(reps))), ProbabilityDiversityCollapse: round4(float64(diversityCollapses) / float64(len(reps))), ProbabilityRareUsefulLoss: round4(float64(rareLossEvents) / float64(len(reps)))}
 	final.GeneticGainSigma = finalMetric.GainSigma
+	final.AllelesAtStart, final.AllelesRetained = metrics[0].AllelesRetained, finalMetric.AllelesRetained
 	final.MeanDeltaF, final.Ne = meanInbreedingRate(finalMetric.Inbreeding, finalMetric.Generation)
 	if finalMetric.Year > 0 {
 		final.Years = finalMetric.Year
@@ -2345,13 +2434,13 @@ func clonePopulation(pop []organism) []organism {
 
 func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects, selEffects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
-	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0, lineBreeding(req)))
+	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0, lineBreeding(req), model.genome.layout))
 	cycle := cycleYearsFor(req, cfg)
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents := selectParents(pop, selEffects, req, cfg, model, rng, gen)
 		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
 		deriveLines(pop, model.matingSystem, model.ssdGenerations, model.genome, req.MutationRate, rng)
-		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents), lineBreeding(req))
+		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents), lineBreeding(req), model.genome.layout)
 		m.Year = round4(float64(gen) * cycle)
 		metrics = append(metrics, m)
 		if progress != nil {
@@ -2619,9 +2708,9 @@ func chooseSecondParent(pop []organism, parents []int, p1 int, rng *rand.Rand, m
 // computeMetrics summarises one generation. v0.8.0: Inbreeding is IBD
 // coancestry relative to the founders (ibdCoancestry), no longer
 // 1 − He/He₀ — that quantity is the diversity loss, reported separately.
-func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean, sigmaA0 float64, rareUsefulAtStart []int, effectiveParents int, betweenLines bool) MetricPoint {
+func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean, sigmaA0 float64, rareUsefulAtStart []int, effectiveParents int, betweenLines bool, layout *locusLayout) MetricPoint {
 	freq := alleleFreq(pop, len(effects))
-	div := diversityFromFreq(freq)
+	div := diversityOf(freq, layout)
 	trait := meanGeneticValue(pop, effects)
 	drift := meanAbsDiff(freq, baseFreq)
 	fixed, favorableFixed, unfavorableFixed := fixationStats(freq, effects)
@@ -2631,7 +2720,7 @@ func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float
 		gainSigma = (trait - baseMean) / sigmaA0
 	}
 	lost := countRareUsefulLost(freq, rareUsefulAtStart)
-	return MetricPoint{Generation: gen, TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
+	return MetricPoint{Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
 }
 func fixationStats(freq []float64, effects []float64) (fixed, favorableFixed, unfavorableFixed int) {
 	for i, p := range freq {

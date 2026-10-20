@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.8 — linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.9 — SSR markers · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -89,11 +89,13 @@
                 <small style="color:var(--muted)">Files are held in memory for ~1 hour, never persisted.</small>
               </div>
               <p style="margin:0 0 10px; font-size:13px; color:var(--muted)">
-                Provide a genotype CSV (required) in the same format as the built-in datasets:
-                <code>id,marker_1,marker_2,...,marker_N</code> with values <code>0</code>/<code>1</code>/<code>2</code>.
-                Optional tables (phenotype, pedigree, edits) are validated and shown in the import summary but not yet consumed by the simulator —
-                phenotypes come from the QTL model, pedigree is built by random mating, and edits use the existing <code>crispr_edits</code> count.
+                Provide a genotype CSV (required): SNP dosages <code>id,marker_1,...,marker_N</code> with values <code>0</code>/<code>1</code>/<code>2</code>,
+                or <strong>SSR allele sizes</strong> — one column per locus with <code>152/158</code> (or <code>152</code> for a homozygous call),
+                two columns per locus (<code>RM1_1,RM1_2</code>), or a GenAlEx export; <code>,</code> <code>;</code> or tab separated, <code>0</code>/<code>NA</code> = missing.
+                Diploid only (tetraploid SSR profiles are rejected).
+                Phenotypes (≥ 20 genotyped lines) set the trait architecture via rrBLUP; predictions drive the imported-GEBV strategy; pedigree and edits are shown but not used.
                 Fixture examples: <a href="/upload-fixture/genotype.csv">genotype</a> ·
+                <a href="/upload-fixture/genotype_ssr.csv">genotype (SSR)</a> ·
                 <a href="/upload-fixture/phenotype.csv">phenotype</a> ·
                 <a href="/upload-fixture/pedigree.csv">pedigree</a> ·
                 <a href="/upload-fixture/edits.csv">edits</a> ·
@@ -569,7 +571,7 @@
         </div>
 
         <div class="card chart-card">
-          <div class="chart-title"><h3>Fixed loci</h3><small>rapid fixation becomes obvious in tiny populations</small></div>
+          <div class="chart-title"><h3 id="chart_fixed_title">Fixed loci</h3><small id="chart_fixed_hint">rapid fixation becomes obvious in tiny populations</small></div>
           <canvas id="chart_fixed" width="900" height="300"></canvas>
           <div id="legend_fixed" class="legend"></div>
         </div>

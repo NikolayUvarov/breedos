@@ -141,6 +141,7 @@
             <li>Средовая дисперсия фиксирована с поколения 0: наследуемость падает по мере истощения VG.</li>
             <li>Прогресс — в долях σA исходной популяции; ΔF и Ne на каждое поколение.</li>
             <li>Эффекты маркеров по вашим фенотипам — rrBLUP с кросс-валидацией точности.</li>
+            <li>Многоаллельные маркеры (SSR): сколько аллелей сохраняет каждая стратегия, He по Нею.</li>
             <li>Климат как G×E: общие, «урожайные» и стресс-специфичные QTL; засуха или жара может поменять лучшую стратегию.</li>
             <li>Самоопылители: скрещивание линий → SSD или удвоенные гаплоиды → новая линия; риск — коансестри между линиями.</li>
           </ul>
@@ -169,7 +170,12 @@
 line_001,0,2,1,2,…
 line_002,2,2,0,1,…
 line_003,1,0,0,2,…</code></pre>
+          <p style="margin-top:12px">Или <strong>микросателлиты (SSR)</strong> — размеры аллелей:</p>
+<pre><code>id,RM1,RM21,RM72,…
+line_01,103/107,125,172,…
+line_02,107,125/131,180,…</code></pre>
           <ul class="clean">
+            <li>SSR: «152/158», «152» для гомозиготы, две колонки на локус или экспорт GenAlEx; разделитель «,», «;» или табуляция; 0 / NA — пропуск. Только диплоиды.</li>
             <li>Заголовок <code>хромосома:позиция</code> — BreedOS строит генетическую карту по вашим хромосомам. Без позиций (<code>m1, m2, …</code>) карта синтетическая.</li>
             <li>Маркеры — по порядку хромосом и позиций.</li>
             <li>До 16 МБ на файл. Данные живут в памяти сервера 1 час и никуда не сохраняются.</li>
@@ -180,7 +186,7 @@ line_003,1,0,0,2,…</code></pre>
           <table class="data-table">
             <thead><tr><th>Файл</th><th>Колонки</th><th>Что делает движок</th></tr></thead>
             <tbody>
-              <tr><td><a href="/upload-fixture/genotype.csv">genotype.csv</a></td><td><code>id, маркеры…</code></td><td class="used">исходная популяция (поколение 0)</td></tr>
+              <tr><td><a href="/upload-fixture/genotype.csv">genotype.csv</a></td><td><code>id, SNP 0/1/2 или SSR</code></td><td class="used">исходная популяция (поколение 0); пример SSR — <a href="/upload-fixture/genotype_ssr.csv">genotype_ssr.csv</a></td></tr>
               <tr><td><a href="/upload-fixture/predictions.csv">predictions.csv</a></td><td><code>id, gebv, uncertainty</code></td><td class="used">ваши GEBV (rrBLUP / BGLR / sommer) — отбор родителей поколения 0</td></tr>
               <tr><td><a href="/upload-fixture/phenotype.csv">phenotype.csv</a></td><td><code>id, trait_value</code></td><td class="used">эффекты маркеров (rrBLUP) — архитектура признака из ваших данных</td></tr>
               <tr><td><a href="/upload-fixture/pedigree.csv">pedigree.csv</a></td><td><code>id, sire, dam</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
@@ -224,7 +230,7 @@ line_003,1,0,0,2,…</code></pre>
   </main>
 
   <footer class="footer">
-    <div class="wrap">BreedOS MVP v0.8.8 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
+    <div class="wrap">BreedOS MVP v0.8.9 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
   </footer>
 
   <!-- Chart data: BreedOS v0.8.0 engine output (POST /api/simulate, core strategy set,

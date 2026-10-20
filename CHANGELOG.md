@@ -7,6 +7,82 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.9] - 2026-10-20
+
+### Added — multi-allelic markers (SSR / microsatellites)
+
+BreedOS read only biallelic 0/1/2 dosages, so marker labs working with SSR
+panels (variety DNA passports, genebank diversity, MAS) could not load
+their data.
+
+**Formats** (comma, semicolon or tab separated; detected automatically
+when the 0/1/2 parse fails and at least half the cells look like
+alleles):
+- one column per locus with `152/158` (or `152` for a homozygous call);
+- two columns per locus (`RM1_1,RM1_2`, `.1/.2`, `-1/-2`, `_a/_b`, or an
+  empty / repeated second header). A separator is required, so loci named
+  `RM1,RM2` are never paired by mistake.
+- GenAlEx exports (counts line, title line, `Sample,Pop,Locus,,…`).
+
+**Import rules.**
+- Missing calls (`0`, `NA`, `-`, `?`, `.`) are drawn from the locus allele
+  frequencies; the count is reported. A half-missing pair is missing.
+- Fragment sizes are rounded to whole base pairs, including decimal commas
+  in semicolon files.
+- Monomorphic loci are dropped and listed.
+- Cells with three or more alleles (polyploid profiles with unknown dosage,
+  e.g. tetraploid potato) are rejected with a clear message.
+
+**Engine.** A locus with k alleles is k indicator markers that share one
+map position. No crossover can separate them, so every strand carries
+exactly one allele through meiosis, selfing and doubled haploids (test,
+15 generations with mutation on). Mutation is disabled on indicators.
+Subsampling takes whole loci. The synthetic map spreads loci over the
+chromosomes. Per-allele trait effects and rrBLUP on one-hot allele
+dosages work unchanged.
+
+**Metrics.**
+- Diversity on SSR loci is Nei's expected heterozygosity 1 − Σp².
+- New `alleles_retained` per generation and `alleles_at_start` /
+  `alleles_retained` per strategy.
+- The decision report summarises allelic richness. On the bundled example
+  (48 rice-like inbred lines × 10 SSR, SSD, 15 cycles), OCS keeps 40 of 57
+  alleles and aggressive selection keeps 10–12.
+
+**Demo.**
+- The upload summary shows loci, alleles per locus, observed
+  heterozygosity and imputed calls.
+- The fixed-loci chart becomes "SSR alleles retained".
+- The table shows alleles kept per strategy.
+- New example file `/upload-fixture/genotype_ssr.csv` (synthetic, labelled
+  as such).
+- `/ru` documents the format.
+
+### Fixed
+
+- A dataset with fewer markers than `qtl_count` (e.g. a dozen SSR loci)
+  made `makeEffects` loop forever. The QTL count is now reduced, with a run
+  note.
+- CRISPR strategies are dropped when the data has no biallelic marker to
+  edit; otherwise they ran as plain balanced selection under a CRISPR name.
+- 0/1/2 dosage tables with semicolon or tab separators (Russian-locale
+  Excel exports) are read.
+- When neither parser accepts a file, both reasons are reported.
+
+### Tests
+
+`ssr_test.go`:
+- slash, two-column, GenAlEx and semicolon formats;
+- RM1/RM2 not paired; tetraploid rejection; a typo in a dosage table
+  stays a dosage error;
+- one allele per strand after 15 generations;
+- Nei's He and allelic richness;
+- whole-locus subsampling;
+- an SSR upload run reports allele retention and drops CRISPR strategies;
+- SSR + phenotypes estimate allele effects;
+- fragment-size rounding;
+- the QTL-count clamp on tiny data.
+
 ## [0.8.8] - 2026-10-20
 
 ### Added — line breeding for self-pollinating crops (Issue 39)

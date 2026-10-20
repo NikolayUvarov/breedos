@@ -309,11 +309,11 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTrai
 
 	appendGen := func(gen int, eff int) {
 		// Aggregate metric on trait 0 (headline).
-		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, mm.sigmaA0[0], rareUsefulAtStart, eff, lineBreeding(req)))
+		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, mm.sigmaA0[0], rareUsefulAtStart, eff, lineBreeding(req), mm.genome.layout))
 		// Per-trait MetricPoints — we only need a small subset for charts,
 		// reuse computeMetrics with per-trait effects + baseline.
 		for t := 0; t < T; t++ {
-			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], mm.sigmaA0[t], rareUsefulAtStart, eff, lineBreeding(req)))
+			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], mm.sigmaA0[t], rareUsefulAtStart, eff, lineBreeding(req), mm.genome.layout))
 		}
 	}
 	populateNeOnAggregate := func() {
@@ -479,7 +479,7 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 	mm := newMultiTraitModel(gm, initial, effects, req.Traits)
 
 	baseFreq := alleleFreq(initial, req.Markers)
-	baseDiversity := diversityFromFreq(baseFreq)
+	baseDiversity := diversityOf(baseFreq, gm.layout)
 	T := len(req.Traits)
 	baseMeans := make([]float64, T)
 	for t := 0; t < T; t++ {

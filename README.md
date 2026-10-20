@@ -158,7 +158,18 @@ Minimal request (omitted fields take defaults):
 - time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`).
 - OCS: `target_delta_f` (default 0.01). Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
-Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages.
+Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages (comma, semicolon or tab separated).
+
+**Multi-allelic markers (SSR / microsatellites).** Genotype tables of allele sizes are read directly:
+- one column per locus with `152/158` (or `152` for a homozygous call);
+- two columns per locus (`RM1_1,RM1_2`);
+- a GenAlEx export.
+
+`0`, `NA`, `-` and `?` mean missing; missing calls are drawn from the locus allele frequencies and counted in the summary. Fragment sizes are rounded to whole base pairs.
+
+Each allele becomes an indicator marker, and the indicators of a locus sit at one map position, so a locus is always inherited as a unit. Reports add Nei's expected heterozygosity per locus and `alleles_retained`, the number of SSR alleles each strategy keeps.
+
+Only diploid data is supported: cells with three or more alleles (e.g. tetraploid potato profiles) are rejected. SSR alleles are not CRISPR edit targets.
 
 When an upload also carries a phenotype CSV (`id,trait`) for at least 20 of the genotyped lines, the trait architecture comes from your data:
 - marker effects are estimated by SNP-BLUP / rrBLUP, with λ = (1−h²)/h²·Σ2pq and at most 1000 phenotyped lines;

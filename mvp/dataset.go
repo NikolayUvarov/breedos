@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"embed"
 	"fmt"
+	"math"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -57,6 +58,10 @@ type loadedDataset struct {
 	sourceNotes   []string
 	external      bool
 	sites         []markerSite // v0.8.0: physical positions, nil when the file has none.
+	// v0.8.9 — multi-allelic (SSR) data: markers are allele indicators
+	// grouped into loci (ssr.go); nil for 0/1/2 dosage data.
+	layout *locusLayout
+	ssr    *ssrInfo
 }
 
 var datasetCache = struct {
@@ -146,7 +151,22 @@ func resetDatasetCache() {
 	datasetCache.items = make(map[string]*loadedDataset)
 }
 
+// parseDatasetCSV reads a 0/1/2 dosage table, or — v0.8.9 — an SSR table of
+// allele sizes when the dosage parse fails and the content looks
+// multi-allelic (ssr.go).
 func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
+	ds, err := parseDosageCSV(raw, sourceFile)
+	if err != nil && looksMultiallelic(raw) {
+		ssr, ssrErr := parseMultiallelicCSV(raw, sourceFile)
+		if ssrErr != nil {
+			return nil, fmt.Errorf("%v; read as an SSR allele table instead: %v", err, ssrErr)
+		}
+		return ssr, nil
+	}
+	return ds, err
+}
+
+func parseDosageCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
 	scanner.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)
 	out := &loadedDataset{sourceFile: sourceFile}
@@ -154,6 +174,7 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 	var headerCols int
 	lineNum := 0
 	expectSites := false
+	delim := "," // v0.8.9: ";" or tab when the header uses them (Excel exports)
 	for scanner.Scan() {
 		lineNum++
 		line := strings.TrimSpace(scanner.Text())
@@ -180,7 +201,10 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 			}
 			continue
 		}
-		fields := strings.Split(line, ",")
+		if !headerSeen {
+			delim = detectDelimiter(line)
+		}
+		fields := strings.Split(line, delim)
 		if !headerSeen {
 			headerSeen = true
 			headerCols = len(fields)
@@ -248,7 +272,12 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 		individuals:   make([]organism, n),
 		accessionIDs:  make([]string, n),
 	}
-	cols := strideColumns(ds.markerCount, m)
+	cols, layout := subsampleColumns(ds, m)
+	if layout != nil {
+		out.layout, out.ssr = layout, ds.ssr
+		out.markerCount = len(cols)
+		m = len(cols)
+	}
 	if ds.sites != nil {
 		out.sites = make([]markerSite, m)
 		for k, c := range cols {
@@ -257,10 +286,18 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 	}
 	for i, src := range idx {
 		geno := make([]uint8, m)
-		for k, c := range cols {
-			geno[k] = ds.individuals[src].geno[c]
+		from := &ds.individuals[src]
+		o := organism{geno: geno}
+		if from.phase != nil {
+			o.phase = make([]uint64, phaseWords(m))
 		}
-		out.individuals[i] = organism{geno: geno}
+		for k, c := range cols {
+			geno[k] = from.geno[c]
+			if from.phase != nil && from.phaseBit(c) == 1 {
+				o.setPhaseBit(k)
+			}
+		}
+		out.individuals[i] = o
 		out.accessionIDs[i] = ds.accessionIDs[src]
 	}
 	return out
@@ -277,4 +314,23 @@ func strideColumns(total, m int) []int {
 		cols[k] = k * total / m
 	}
 	return cols
+}
+
+// subsampleColumns returns the marker columns subsampleDataset keeps for m
+// requested markers. v0.8.9: multi-allelic data is subsampled by whole
+// loci, so the indicators of a locus are never split; the re-indexed
+// layout is returned with them (nil for dosage data).
+func subsampleColumns(ds *loadedDataset, m int) ([]int, *locusLayout) {
+	if m <= 0 || m > ds.markerCount {
+		m = ds.markerCount
+	}
+	if ds.layout == nil {
+		return strideColumns(ds.markerCount, m), nil
+	}
+	nLoci := ds.layout.loci()
+	want := int(math.Round(float64(nLoci) * float64(m) / float64(ds.markerCount)))
+	if want < 1 {
+		want = 1
+	}
+	return subsetLayout(ds.layout, strideColumns(nLoci, want))
 }
