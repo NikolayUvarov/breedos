@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-10-20
+
+### Added — marker effects estimated from uploaded phenotypes (Issue 37)
+
+Until now uploaded phenotypes were parsed and ignored, so "my data →
+result" meant "my allele frequencies → a synthetic architecture". Now, when
+an upload carries phenotypes for at least 20 genotyped lines, BreedOS
+estimates additive marker effects and uses them as the trait architecture
+for forward simulation.
+
+- **Model.** SNP-BLUP / rrBLUP in the n×n dual form:
+  - β̂ = X'(XX' + λI)⁻¹(y − ȳ), with λ = (1 − h²)/h² · Σ2pq;
+  - h² is the request heritability, the same value that sets the
+    simulation's environmental variance;
+  - at most 1000 phenotyped lines (random subset beyond that);
+  - plain Go: one kernel, Cholesky solves.
+- **Validation.** 5-fold cross-validated predictive ability r(ŷ, y) and the
+  implied accuracy r/h, reported in `effect_estimate`, in a run note and in
+  the key assumptions. On a synthetic population with known effects
+  (n=400, m=500, h²=0.5): predictive ability 0.30, accuracy ≈ 0.43,
+  r(β̂, β) = 0.53. This is in line with Daetwyler's √(Nh²/(Nh²+Me)) ≈ 0.49
+  for the 80 % training sets.
+- **Response fields.** `effects_source` (`synthetic_qtl` |
+  `estimated_from_phenotype`) and `effect_estimate`. Gain is then in the
+  phenotype's units.
+- **Honesty.** The run note says plainly that forward simulation treats the
+  shrunken estimates as the true effects, so genetic variance and response
+  are understated where accuracy is low.
+- **Edit classification.** Candidate edits are classified on effects scaled
+  to SD units (the scale the edit/cross/wait thresholds assume). "Rare
+  useful" loci are the top decile of positive effects when effects are
+  dense.
+- **Upload checks.**
+  - The summary reports `matched_genotype`.
+  - Phenotype ids that match no genotype id give a clear 400, mirrored
+    client-side because the production proxy replaces 400 bodies.
+  - Fewer than 20 matches → the phenotype is listed as not used, with the
+    reason.
+- `/ru`: the data table, "what's inside" and "what it does not do yet" now
+  say that phenotypes drive the architecture. They also mention OCS and the
+  calendar axis.
+
+### Tests
+
+`effects_test.go`:
+- recovery of a known architecture;
+- upload → simulation uses estimated effects from all 120 phenotyped lines;
+- the id mismatch gives a 400 with a message.
+
 ## [0.8.5] - 2026-10-20
 
 ### Added — optimum contribution selection with a ΔF target (Issue 36)

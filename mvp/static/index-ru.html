@@ -140,12 +140,15 @@
             <li>Инбридинг F — по идентичности по происхождению (IBD) относительно исходной популяции, а не по гетерозиготности маркеров.</li>
             <li>Средовая дисперсия фиксирована с поколения 0: наследуемость падает по мере истощения VG.</li>
             <li>Прогресс — в долях σA исходной популяции; ΔF и Ne на каждое поколение.</li>
+            <li>Эффекты маркеров по вашим фенотипам — rrBLUP с кросс-валидацией точности.</li>
           </ul>
         </div>
         <div class="card mini">
           <h3>Слой решений</h3>
           <ul class="clean">
             <li>Monte Carlo повторы, Pareto-фронт «прогресс × риск», ограничения по F, ΔF, разнообразию и числу родителей.</li>
+            <li>Оптимальные вклады родителей (OCS, Meuwissen 1997) с целевым ΔF за поколение.</li>
+            <li>Календарная ось: прогресс и ΔF в год, ускоренный цикл геномной селекции.</li>
             <li>Анализ чувствительности: держится ли рекомендация при других h², % отбора, сценариях.</li>
             <li>Загрузка своих генотипов (CSV 0/1/2) и публичные наборы — Arabidopsis 1001, пшеница.</li>
             <li>Каждый отчёт перечисляет допущения и то, что может быть неверно.</li>
@@ -177,12 +180,12 @@ line_003,1,0,0,2,…</code></pre>
             <tbody>
               <tr><td><a href="/upload-fixture/genotype.csv">genotype.csv</a></td><td><code>id, маркеры…</code></td><td class="used">исходная популяция (поколение 0)</td></tr>
               <tr><td><a href="/upload-fixture/predictions.csv">predictions.csv</a></td><td><code>id, gebv, uncertainty</code></td><td class="used">ваши GEBV (rrBLUP / BGLR / sommer) — отбор родителей поколения 0</td></tr>
-              <tr><td><a href="/upload-fixture/phenotype.csv">phenotype.csv</a></td><td><code>id, trait_value</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
+              <tr><td><a href="/upload-fixture/phenotype.csv">phenotype.csv</a></td><td><code>id, trait_value</code></td><td class="used">эффекты маркеров (rrBLUP) — архитектура признака из ваших данных</td></tr>
               <tr><td><a href="/upload-fixture/pedigree.csv">pedigree.csv</a></td><td><code>id, sire, dam</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
               <tr><td><a href="/upload-fixture/edits.csv">edits.csv</a></td><td><code>marker_id, target_allele, expected_effect</code></td><td class="shown">показывается в сводке, в расчёт пока не идёт</td></tr>
             </tbody>
           </table>
-          <p class="try">Имена файлов — ссылки на учебные примеры. В демо: Founder population → «Uploaded CSVs». Нет своих данных — <a href="/datasets">публичные наборы</a>.</p>
+          <p class="try">Фенотипы нужны минимум для 20 генотипированных линий; точность оценки (кросс-валидация) будет в отчёте. Имена файлов — ссылки на учебные примеры. В демо: Founder population → «Uploaded CSVs». Нет своих данных — <a href="/datasets">публичные наборы</a>.</p>
         </div>
       </div>
     </section>
@@ -191,12 +194,12 @@ line_003,1,0,0,2,…</code></pre>
       <div class="card">
         <h2>Чего BreedOS пока не делает</h2>
         <ul class="clean">
-          <li><strong>Время и деньги:</strong> поколения не переведены в годы и стоимость цикла.</li>
+          <li><strong>Деньги:</strong> длину цикла в годах можно задать, стоимость цикла — нет.</li>
           <li><strong>Структура программы:</strong> нет самоопыления, DH, гибридов и стадий испытаний.</li>
           <li><strong>Среда:</strong> нет взаимодействия генотип × среда (G×E).</li>
           <li><strong>Животные:</strong> нет полов и перекрывающихся поколений.</li>
-          <li><strong>Предсказание:</strong> нет реальной GBLUP-модели — сейчас mock с заданной точностью.</li>
-          <li><strong>Ваши данные:</strong> генотипы используются, фенотипы — пока нет.</li>
+          <li><strong>Предсказание:</strong> стратегия GS — mock с заданной точностью; rrBLUP оценивает только эффекты по вашим фенотипам.</li>
+          <li><strong>Ваши данные:</strong> генотипы, фенотипы и GEBV используются; родословная и правки — пока нет.</li>
         </ul>
         <p class="invite">Если вы видите здесь ошибку модели — именно это я и хочу услышать.</p>
       </div>
@@ -219,7 +222,7 @@ line_003,1,0,0,2,…</code></pre>
   </main>
 
   <footer class="footer">
-    <div class="wrap">BreedOS MVP v0.8.5 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
+    <div class="wrap">BreedOS MVP v0.8.6 — симулятор слоя принятия решений, не лабораторный протокол. <a href="https://github.com/NikolayUvarov/breedos">Исходный код на GitHub</a>.</div>
   </footer>
 
   <!-- Chart data: BreedOS v0.8.0 engine output (POST /api/simulate, core strategy set,

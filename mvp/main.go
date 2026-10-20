@@ -142,6 +142,10 @@ type SimResponse struct {
 	// floored to 2 individuals: the run completed but its report describes
 	// a bottleneck the operator almost certainly did not intend.
 	DegenerateRun bool `json:"degenerate_run,omitempty"`
+	// v0.8.6 — Issue 37. "synthetic_qtl" or "estimated_from_phenotype";
+	// the estimate's diagnostics accompany the latter.
+	EffectsSource  string                 `json:"effects_source"`
+	EffectEstimate *EffectEstimateSummary `json:"effect_estimate,omitempty"`
 }
 
 type DecisionSummary struct {
@@ -806,6 +810,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 
 	var initial []organism
 	var datasetMeta *loadedDataset
+	var upload *UploadedDataset
 	switch {
 	case req.Upload != "":
 		// v0.7.26 — Issue 05. Upload path: founder population comes
@@ -821,6 +826,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		req.PopulationSize = len(ds.individuals)
 		req.Markers = ds.markerCount
 		datasetMeta = ds
+		upload = up
 		initial = clonePopulation(ds.individuals)
 		reportProgress(progress, 3, fmt.Sprintf("loaded upload %s: N=%d, markers=%d (ephemeral, in-memory)",
 			req.Upload, req.PopulationSize, req.Markers))
@@ -841,6 +847,20 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	}
 
 	effects := makeEffects(req.Markers, req.QTLCount, rng)
+	// v0.8.6 — Issue 37. Uploaded phenotypes replace the synthetic QTL
+	// with SNP-BLUP effects at the simulation's marker columns.
+	effectsSource := "synthetic_qtl"
+	var effectEstimate *EffectEstimateSummary
+	if upload != nil {
+		est, sum, err := effectsFromUpload(upload, strideColumns(upload.Genotype.dataset.markerCount, req.Markers), req.Heritability, rand.New(rand.NewSource(req.Seed+effectsSeedOffset)))
+		if err != nil {
+			return SimResponse{}, fmt.Errorf("estimate marker effects from the uploaded phenotype: %w", err)
+		}
+		if est != nil {
+			effects, effectEstimate, effectsSource = est, sum, "estimated_from_phenotype"
+			reportProgress(progress, 4, fmt.Sprintf("marker effects estimated from %d phenotyped lines (CV predictive ability %.2f)", sum.Phenotyped, sum.CVPredictiveAbility))
+		}
+	}
 	// v0.8.0. Founder phase is drawn from its own stream so the QTL
 	// effects above stay identical to v0.7.x for the same seed.
 	gm := buildGenomeMap(req, datasetMeta)
@@ -850,7 +870,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	baseDiversity := diversityFromFreq(baseFreq)
 	baseMean := meanGeneticValue(initial, effects)
 	rareUsefulAtStart := rareUsefulLoci(baseFreq, effects)
-	candidates := rankEditCandidates(baseFreq, effects, req.CrisprEdits, baseDiversity)
+	candidates := rankEditCandidates(baseFreq, editScaleEffects(effects, effectEstimate != nil), req.CrisprEdits, baseDiversity)
 	// v0.7.29 — Issue 08. Patch the imported-GEBV slice onto the
 	// imported_gebv strategy entry (if present). Computed once from
 	// the upload's accession IDs; aligned with the gen-0 population.
@@ -880,7 +900,46 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	// the per-candidate classifications produced by rankEditCandidates.
 	decision.EditDecisions = summarizeEditDecisions(candidates)
 	reportProgress(progress, 98, "building response")
-	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm), DegenerateRun: degenerateParentPool(req)}, nil
+	notes := buildNotes(req, len(strategies), baseDiversity, datasetMeta, gm)
+	if effectEstimate != nil {
+		e := effectEstimate
+		sub := ""
+		if e.SubsampledPhenotyped {
+			sub = fmt.Sprintf(" (a random %d of the phenotyped lines)", maxPhenotypedForEffects)
+		}
+		notes = append(notes, fmt.Sprintf("Trait architecture from your data: SNP-BLUP effects for %q on %d phenotyped lines%s × %d markers (h² assumed %.2f, λ = %.4g). %d-fold cross-validated predictive ability r = %.2f, accuracy ≈ %.2f. Forward simulation treats these shrunken estimates as the true effects, so genetic variance and response are understated where accuracy is low. Gain is in the phenotype's units.", e.Trait, e.Phenotyped, sub, e.Markers, e.HeritabilityAssumed, e.Lambda, e.Folds, e.CVPredictiveAbility, e.CVAccuracyApprox))
+		decision.KeyAssumptions = append(decision.KeyAssumptions, fmt.Sprintf("Marker effects estimated from the uploaded phenotype by SNP-BLUP (CV accuracy ≈ %.2f), not synthetic QTL.", e.CVAccuracyApprox))
+	}
+	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: notes, DegenerateRun: degenerateParentPool(req), EffectsSource: effectsSource, EffectEstimate: effectEstimate}, nil
+}
+
+// effectsSeedOffset separates the cross-validation fold RNG from the run
+// stream (v0.8.6).
+const effectsSeedOffset = 0x0e57_0860
+
+// editScaleEffects puts estimated effects (trait units, shrunk) on the
+// scale the edit-vs-cross-vs-wait thresholds expect: SD units of the
+// non-zero effects, as the synthetic QTL draw is. Synthetic effects pass
+// through unchanged.
+func editScaleEffects(effects []float64, estimated bool) []float64 {
+	if !estimated {
+		return effects
+	}
+	nz := make([]float64, 0, len(effects))
+	for _, e := range effects {
+		if e != 0 {
+			nz = append(nz, e)
+		}
+	}
+	sd := stddev(nz)
+	if sd <= 0 {
+		return effects
+	}
+	out := make([]float64, len(effects))
+	for i, e := range effects {
+		out[i] = e / sd
+	}
+	return out
 }
 
 // founderPhaseSeedOffset separates the founder-phase RNG stream from the
@@ -948,7 +1007,7 @@ func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datase
 		notes = append(notes, fmt.Sprintf("Optimum contribution selection: target ΔF %.2f%% per generation (Ne ≈ %.0f). Contributions maximise c'g subject to c'Fc = θ + ΔF(1 − θ), with F the IBD coancestry among the top %d candidates by phenotype (Meuwissen 1997); realised ΔF is in the results.", 100*req.TargetDeltaF, 1/(2*req.TargetDeltaF), ocsMaxCandidates))
 	}
 	if req.Upload != "" {
-		notes = append(notes, fmt.Sprintf("Founder population came from upload %s (ephemeral, in-memory; not persisted). EARLY IMPORT path — not production integration. Phenotype, pedigree, and candidate-edit tables, if uploaded, are surfaced in the upload summary but NOT consumed by this run.", req.Upload))
+		notes = append(notes, fmt.Sprintf("Founder population came from upload %s (ephemeral, in-memory; not persisted). EARLY IMPORT path — not production integration. Pedigree and candidate-edit tables, if uploaded, are surfaced in the upload summary but NOT consumed; phenotypes drive the trait architecture when at least %d genotyped lines have one.", req.Upload, minPhenotypedForEffects))
 	}
 	if datasetMeta != nil {
 		switch {
@@ -2579,9 +2638,22 @@ func stddev(vals []float64) float64 {
 	return math.Sqrt(math.Max(0, variance))
 }
 func rareUsefulLoci(freq []float64, effects []float64) []int {
+	// v0.8.6: with dense estimated effects (Issue 37) "useful" means the top
+	// decile of positive effects, not every marker with a tiny effect.
+	thr := 0.0
+	var pos []float64
+	for _, e := range effects {
+		if e > 0 {
+			pos = append(pos, e)
+		}
+	}
+	if len(pos) > len(effects)/5 {
+		sort.Float64s(pos)
+		thr = pos[len(pos)*9/10]
+	}
 	out := make([]int, 0)
 	for i := range freq {
-		if effects[i] > 0 && freq[i] > 0.02 && freq[i] < 0.25 {
+		if effects[i] > thr && freq[i] > 0.02 && freq[i] < 0.25 {
 			out = append(out, i)
 		}
 	}

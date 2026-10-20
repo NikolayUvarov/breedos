@@ -2073,6 +2073,22 @@ function setupUploadUI() {
       if (el && el.files && el.files[0]) fd.append(field, el.files[0]);
     }
     const status = byId('uploadStatus');
+    // v0.8.6 — Issue 37. Mirror the server's phenotype-id check: the
+    // production proxy replaces 400 bodies, so the reason would be lost.
+    const phenoEl = byId('uploadPhenotype');
+    if (phenoEl && phenoEl.files && phenoEl.files[0]) {
+      const firstColumn = text => text.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).slice(1).map(l => l.split(',')[0].trim());
+      const genoIds = firstColumn(await genoEl.files[0].text());
+      const phenoIds = firstColumn(await phenoEl.files[0].text());
+      const known = new Set(genoIds);
+      if (phenoIds.length && !phenoIds.some(id => known.has(id))) {
+        if (status) {
+          status.textContent = `upload failed: none of the ${phenoIds.length} phenotype ids match a genotype id (phenotype starts "${phenoIds[0]}", genotype starts "${genoIds[0] || ''}"). Both id columns must use the same identifiers.`;
+          status.style.color = 'var(--danger)';
+        }
+        return;
+      }
+    }
     if (status) { status.textContent = 'uploading...'; status.style.color = ''; }
     uploadBtn.disabled = true;
     try {
@@ -2104,7 +2120,7 @@ function renderUploadSummary(summary, id) {
     parts.push('<div><strong>Genotype</strong>: ' + summary.genotype.individuals + ' individuals × ' + summary.genotype.markers + ' markers (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
   }
   if (summary.phenotype) {
-    parts.push('<div><strong>Phenotype</strong>: ' + summary.phenotype.rows + ' rows, trait <code>' + esc(summary.phenotype.trait_name) + '</code> ∈ [' + summary.phenotype.min.toFixed(3) + ', ' + summary.phenotype.max.toFixed(3) + '], mean ' + summary.phenotype.mean.toFixed(3) + '</div>');
+    parts.push('<div><strong>Phenotype</strong>: ' + summary.phenotype.rows + ' rows, trait <code>' + esc(summary.phenotype.trait_name) + '</code> ∈ [' + summary.phenotype.min.toFixed(3) + ', ' + summary.phenotype.max.toFixed(3) + '], mean ' + summary.phenotype.mean.toFixed(3) + (summary.phenotype.matched_genotype != null ? ', ' + summary.phenotype.matched_genotype + ' matched to genotyped lines' : '') + '</div>');
   }
   if (summary.pedigree) {
     parts.push('<div><strong>Pedigree</strong>: ' + summary.pedigree.rows + ' rows, ' + summary.pedigree.unique_sires + ' unique sires × ' + summary.pedigree.unique_dams + ' unique dams</div>');

@@ -248,10 +248,7 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 		individuals:   make([]organism, n),
 		accessionIDs:  make([]string, n),
 	}
-	cols := make([]int, m)
-	for k := range cols {
-		cols[k] = k * ds.markerCount / m
-	}
+	cols := strideColumns(ds.markerCount, m)
 	if ds.sites != nil {
 		out.sites = make([]markerSite, m)
 		for k, c := range cols {
@@ -267,4 +264,17 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 		out.accessionIDs[i] = ds.accessionIDs[src]
 	}
 	return out
+}
+
+// strideColumns picks m of total marker columns at an even stride, in
+// order. subsampleDataset and the effect estimator (effects.go) must agree.
+func strideColumns(total, m int) []int {
+	if m <= 0 || m > total {
+		m = total
+	}
+	cols := make([]int, m)
+	for k := range cols {
+		cols[k] = k * total / m
+	}
+	return cols
 }

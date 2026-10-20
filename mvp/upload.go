@@ -68,6 +68,10 @@ type uploadedPhenotype struct {
 	Max        float64  `json:"max"`
 	Mean       float64  `json:"mean"`
 	SampleIDs  []string `json:"sample_ids"`                   // first up to 5 ids; used to flag id-mismatch against genotype.
+	// v0.8.6 — Issue 37. Ids also present in the genotype CSV; the engine
+	// estimates marker effects from these when there are enough of them.
+	MatchedGenotype int                `json:"matched_genotype"`
+	values          map[string]float64 // id → trait value, for effect estimation.
 }
 
 type uploadedPedigree struct {
@@ -202,7 +206,7 @@ func parseUploadPhenotype(raw []byte) (*uploadedPhenotype, error) {
 	}
 	trait := strings.TrimSpace(headers[1])
 
-	out := &uploadedPhenotype{TraitName: trait}
+	out := &uploadedPhenotype{TraitName: trait, values: make(map[string]float64)}
 	out.SampleIDs = make([]string, 0, 5)
 	first := true
 	for i, raw := range lines[1:] {
@@ -229,6 +233,7 @@ func parseUploadPhenotype(raw []byte) (*uploadedPhenotype, error) {
 		if len(out.SampleIDs) < 5 {
 			out.SampleIDs = append(out.SampleIDs, strings.TrimSpace(fields[0]))
 		}
+		out.values[strings.TrimSpace(fields[0])] = v
 		out.Rows++
 	}
 	if out.Rows == 0 {
@@ -481,8 +486,24 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "upload: phenotype: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// v0.8.6 — Issue 37. Phenotypes now drive the trait architecture:
+		// marker effects are estimated from the genotyped lines that have
+		// a phenotype (effects.go).
+		for _, id := range g.dataset.accessionIDs {
+			if _, ok := p.values[id]; ok {
+				p.MatchedGenotype++
+			}
+		}
+		if p.MatchedGenotype == 0 {
+			http.Error(w, fmt.Sprintf("upload: phenotype: none of the %d phenotype ids match a genotype id (phenotype starts %q, genotype starts %q). The id columns of both files must use the same identifiers.", p.Rows, firstOr(p.SampleIDs), firstOr(g.SampleIDs)), http.StatusBadRequest)
+			return
+		}
 		out.Phenotype = p
-		out.IgnoredByEngine = append(out.IgnoredByEngine, "phenotype (simulator generates phenotypes from QTL model; uploaded phenotype is shown but not consumed)")
+		if p.MatchedGenotype < minPhenotypedForEffects {
+			out.IgnoredByEngine = append(out.IgnoredByEngine, fmt.Sprintf("phenotype (only %d genotyped lines have a phenotype; at least %d are needed to estimate marker effects)", p.MatchedGenotype, minPhenotypedForEffects))
+		} else {
+			out.UsedByEngine = append(out.UsedByEngine, fmt.Sprintf("phenotype (marker effects estimated by rrBLUP from %d phenotyped lines; they replace the synthetic QTL)", p.MatchedGenotype))
+		}
 	}
 
 	if ped, err := readFormFile(r, "pedigree"); err != nil {
@@ -558,6 +579,13 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		"note":      "Uploaded files are held in memory for up to 1 hour and never persisted. Reference upload_id in /api/simulate to use this genotype.",
 	}
 	_ = enc.Encode(resp)
+}
+
+func firstOr(ids []string) string {
+	if len(ids) == 0 {
+		return ""
+	}
+	return ids[0]
 }
 
 // readFormFile reads at most uploadMaxBytes from a named form file.

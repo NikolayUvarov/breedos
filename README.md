@@ -51,7 +51,7 @@ Core mode runs a four-strategy subset (plus the CRISPR strategy when enabled); a
 - **Cost.** Cycle length in years is an input (`cycle_years`, `genomic_cycle_years`), but the cost per cycle is not modelled.
 - **Breeding-program structure.** There is no selfing, doubled haploids, hybrids or trial stages, no sexes and no overlapping generations.
 - **Genotype × environment interaction.** Climate stress is a uniform penalty on the trait mean.
-- **Prediction and phenotypes.** There is no production GBLUP model, and uploaded phenotypes and pedigrees are parsed but not yet used by the engine.
+- **Prediction.** The genomic-selection strategy uses a mock predictor with a configurable accuracy. Uploaded phenotypes do feed the engine: SNP-BLUP estimates the marker effects, see below. Uploaded pedigrees and edit tables are parsed but not used.
 
 ## CRISPR positioning
 
@@ -149,7 +149,14 @@ Minimal request (omitted fields take defaults):
 - time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`).
 - OCS: `target_delta_f` (default 0.01). Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
-Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages. Marker positions are read from a `# Sites (chrom:pos), ...` comment line followed by `# chrom:pos, chrom:pos, ...`, or from `chrom:pos` header labels. Markers must be ordered by chromosome and position.
+Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages.
+
+When an upload also carries a phenotype CSV (`id,trait`) for at least 20 of the genotyped lines, the trait architecture comes from your data:
+- marker effects are estimated by SNP-BLUP / rrBLUP, with λ = (1−h²)/h²·Σ2pq and at most 1000 phenotyped lines;
+- they replace the synthetic QTL, and gain is reported in the phenotype's units;
+- the response carries `effects_source` and `effect_estimate`, including 5-fold cross-validated predictive ability and accuracy.
+
+Founders can be phenotyped or unphenotyped lines of the same genotype file. Marker positions are read from a `# Sites (chrom:pos), ...` comment line followed by `# chrom:pos, chrom:pos, ...`, or from `chrom:pos` header labels. Markers must be ordered by chromosome and position.
 
 ## Project structure
 
