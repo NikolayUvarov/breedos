@@ -81,6 +81,8 @@ function requestFromForm() {
     markers: Math.trunc(numberValue('markers')),
     qtl_count: Math.trunc(numberValue('qtl_count')),
     generations: Math.trunc(numberValue('generations')),
+    cycle_years: numberValue('cycle_years'),
+    genomic_cycle_years: numberValue('genomic_cycle_years'),
     selection_percent: numberValue('selection_percent'),
     heritability: numberValue('heritability'),
     mutation_rate: numberValue('mutation_rate'),
@@ -241,6 +243,8 @@ function setFormValues(values) {
 const presets = {
   tiny: {
     dataset: 'synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260505,
     population_size: 8,
     markers: 180,
@@ -260,6 +264,8 @@ const presets = {
   },
   balanced: {
     dataset: 'synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260505,
     population_size: 400,
     markers: 900,
@@ -279,6 +285,8 @@ const presets = {
   },
   large: {
     dataset: 'synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260505,
     population_size: 2500,
     markers: 800,
@@ -296,8 +304,33 @@ const presets = {
     inbreeding_limit: 0.25,
     diversity_loss_limit: 0.30
   },
+  // v0.8.4 — Issue 35. Same per-cycle accuracy for GS and phenotypic
+  // selection; GS cycles twice as fast (2.5 vs 5 years) over a 30-year horizon.
+  gs_years: {
+    dataset: 'synthetic',
+    cycle_years: 5,
+    genomic_cycle_years: 2.5,
+    seed: 20261020,
+    population_size: 300,
+    markers: 1500,
+    qtl_count: 60,
+    generations: 6,
+    selection_percent: 10,
+    heritability: 0.3,
+    mutation_rate: 0,
+    crispr_enabled: false,
+    crispr_edits: 0,
+    crispr_intro_percent: 0,
+    strategy_set: 'advanced',
+    replicates: 5,
+    worker_count: 0,
+    inbreeding_limit: 0.25,
+    diversity_loss_limit: 0.30
+  },
   crispr: {
     dataset: 'synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260505,
     population_size: 240,
     markers: 700,
@@ -323,6 +356,8 @@ const presets = {
   // the multi-trait engine ships (Issue 18).
   holstein: {
     dataset: 'holstein_synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260601,
     population_size: 800,
     markers: 1500,
@@ -347,6 +382,8 @@ const presets = {
   // facing "happy path".
   methane_dairy_intensity: {
     dataset: 'holstein_synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -378,6 +415,8 @@ const presets = {
   // Same shape as the intensity preset; different correlation sign.
   methane_dairy_production: {
     dataset: 'holstein_synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -566,7 +605,8 @@ function applyPreset(name) {
     balanced: 'Balanced default',
     large: 'Large fast demo',
     crispr: 'CRISPR seed demo',
-    holstein: 'Holstein dairy (single-trait, milk yield)',
+    gs_years: 'GS vs phenotype on a calendar axis (5-year vs 2.5-year cycles)',
+    holstein: 'Holstein dairy (educational — no sexes or overlapping generations)',
     methane_dairy_intensity: 'Methane (dairy, intensity) — favourable -0.26 correlation',
     methane_dairy_production: 'Methane (dairy, production) — unfavourable +0.35 correlation'
   };
@@ -878,7 +918,7 @@ function renderStrategyTable(strategies, prev) {
         <td><strong style="color:${colors[s.code] || '#fff'}">${escapeHtml(labels[s.code] || s.name)}</strong><br><span>${escapeHtml(s.summary)}</span></td>
         <td>${formatInt(s.final.decision_rank)}</td>
         <td>${fmt(s.final.risk_adjusted_score)}</td>
-        <td>${fmt(s.final.genetic_gain)}<br><span>±${fmt(s.final.gain_std)} · ${fmt(s.final.genetic_gain_sigma)} σA</span></td>
+        <td>${fmt(s.final.genetic_gain)}<br><span>±${fmt(s.final.gain_std)} · ${fmt(s.final.genetic_gain_sigma)} σA${s.final.years ? ` · ${fmt(s.final.gain_sigma_per_year)} σA/yr` : ''}</span></td>
         <td>${fmt(s.final.diversity)}<br><span>±${fmt(s.final.diversity_std)}</span></td>
         <td>${fmt(s.final.inbreeding)}<br><span>±${fmt(s.final.inbreeding_std)} · ΔF ${(100 * (Number(s.final.mean_delta_f) || 0)).toFixed(2)}% · Ne ${formatInt(Math.round(Number(s.final.ne) || 0))}</span></td>
         <td>${fmt(combinedRisk(s.final))}</td>
@@ -1140,12 +1180,13 @@ function drawMetricChart(canvasId, legendId, data, prev, metric, title) {
 
   let all = [];
   let maxGen = 0;
+  const xOf = chartXAccessor(data);
   function collect(series) {
     for (const s of series) {
       for (const p of s.metrics || []) {
         const val = Number(p[metric]);
         if (Number.isFinite(val)) all.push(val);
-        maxGen = Math.max(maxGen, Number(p.generation));
+        maxGen = Math.max(maxGen, xOf(p));
       }
     }
   }
@@ -1199,10 +1240,10 @@ function drawMetricChart(canvasId, legendId, data, prev, metric, title) {
   ctx.textAlign = 'left';
   ctx.fillText(title, margin.left, 2);
   ctx.textAlign = 'center';
-  ctx.fillText('generation', margin.left + innerW / 2, height - 18);
+  ctx.fillText(xOf.label, margin.left + innerW / 2, height - 18);
 
-  drawSeries(ctx, prevStrategies, metric, x, y, true);
-  drawSeries(ctx, strategies, metric, x, y, false);
+  drawSeries(ctx, prevStrategies, metric, x, y, true, xOf);
+  drawSeries(ctx, strategies, metric, x, y, false, xOf);
 
   const currentLegend = strategies.map(s => `
     <span><i class="dot" style="background:${colors[s.code] || '#fff'}"></i>${escapeHtml(labels[s.code] || s.name)}</span>
@@ -1234,10 +1275,11 @@ function drawNeChart(canvasId, legendId, data, prev) {
   const logMin = 1; // log10(10)
   const logMax = 4; // log10(10000)
   let maxGen = 0;
+  const xOf = chartXAccessor(data);
   function scanGen(series) {
     for (const s of series) {
       for (const p of s.metrics || []) {
-        maxGen = Math.max(maxGen, Number(p.generation));
+        maxGen = Math.max(maxGen, xOf(p));
       }
     }
   }
@@ -1311,8 +1353,8 @@ function drawNeChart(canvasId, legendId, data, prev) {
   }
 
   // Series: previous run (dashed) then current (solid).
-  drawSeries(ctx, prevStrategies, 'ne', x, y, true);
-  drawSeries(ctx, strategies,     'ne', x, y, false);
+  drawSeries(ctx, prevStrategies, 'ne', x, y, true, xOf);
+  drawSeries(ctx, strategies,     'ne', x, y, false, xOf);
 
   // Legend.
   const currentLegend = strategies.map(s => `
@@ -1322,7 +1364,17 @@ function drawNeChart(canvasId, legendId, data, prev) {
   byId(legendId).innerHTML = currentLegend + previousLegend;
 }
 
-function drawSeries(ctx, strategies, metric, x, y, dashed) {
+// v0.8.4 — Issue 35. Charts plot by calendar year when the run has a time
+// axis (metrics carry `year`), by generation otherwise.
+function chartXAccessor(data) {
+  const yearsOn = Number((data && data.request && data.request.cycle_years) || 0) > 0;
+  const fn = yearsOn ? p => Number(p.year || 0) : p => Number(p.generation);
+  fn.label = yearsOn ? 'year' : 'generation';
+  return fn;
+}
+
+function drawSeries(ctx, strategies, metric, x, y, dashed, xOf) {
+  xOf = xOf || (p => Number(p.generation));
   ctx.save();
   ctx.globalAlpha = dashed ? 0.38 : 1;
   ctx.setLineDash(dashed ? [7, 7] : []);
@@ -1333,7 +1385,7 @@ function drawSeries(ctx, strategies, metric, x, y, dashed) {
     ctx.lineWidth = dashed ? 2 : 3;
     ctx.beginPath();
     pts.forEach((p, idx) => {
-      const xx = x(p.generation);
+      const xx = x(xOf(p));
       const yy = y(p[metric]);
       if (idx === 0) ctx.moveTo(xx, yy); else ctx.lineTo(xx, yy);
     });
@@ -1342,7 +1394,7 @@ function drawSeries(ctx, strategies, metric, x, y, dashed) {
       const last = pts[pts.length - 1];
       ctx.fillStyle = colors[s.code] || '#ffffff';
       ctx.beginPath();
-      ctx.arc(x(last.generation), y(last[metric]), 4, 0, Math.PI * 2);
+      ctx.arc(x(xOf(last)), y(last[metric]), 4, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -1403,6 +1455,8 @@ function requestSignature(req) {
     markers: Number(req.markers) || 0,
     qtl_count: Number(req.qtl_count) || 0,
     generations: Number(req.generations) || 0,
+    cycle_years: Number(req.cycle_years) || 0,
+    genomic_cycle_years: Number(req.genomic_cycle_years) || 0,
     selection_percent: Number(req.selection_percent) || 0,
     heritability: Number(req.heritability) || 0,
     mutation_rate: Number(req.mutation_rate) || 0,
@@ -1432,6 +1486,8 @@ function changedParams(prevReq, curReq) {
     ['markers', 'markers'],
     ['qtl_count', 'QTL'],
     ['generations', 'generations'],
+    ['cycle_years', 'cycle years'],
+    ['genomic_cycle_years', 'genomic cycle years'],
     ['selection_percent', 'selection %'],
     ['heritability', 'heritability'],
     ['mutation_rate', 'mutation rate'],
@@ -1483,7 +1539,13 @@ function strategyCountForRequest(req) {
 function runBudgetCells(req) {
   const n = Number(req.population_size) || 0;
   const m = Number(req.markers) || 0;
-  const g = (Number(req.generations) || 0) + 1;
+  // v0.8.4 — mirrors maxGenerations(): a shorter genomic cycle runs more
+  // generations over the same calendar horizon.
+  const gens = Number(req.generations) || 0;
+  const cyc = Number(req.cycle_years) || 0;
+  const gcyc = Number(req.genomic_cycle_years) || 0;
+  const multi = !!(multiTraitState.traits && multiTraitState.traits.length);
+  const g = (cyc > 0 && gcyc > 0 && gcyc < cyc && !multi ? Math.max(1, Math.round(gens * cyc / gcyc)) : gens) + 1;
   const s = strategyCountForRequest(req);
   const r = Math.max(1, Number(req.replicates) || 0);
   return n * m * g * s * r;

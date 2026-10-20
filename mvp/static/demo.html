@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.3 — linked genome · IBD inbreeding · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.4 — linked genome · IBD inbreeding · calendar time · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -55,9 +55,10 @@
           <button class="btn tiny" type="button" data-preset="balanced">Balanced</button>
           <button class="btn tiny" type="button" data-preset="large">Large fast</button>
           <button class="btn tiny" type="button" data-preset="crispr">CRISPR seed</button>
-          <button class="btn tiny" type="button" data-preset="holstein">Holstein dairy</button>
-          <button class="btn tiny" type="button" data-preset="methane_dairy_intensity">Methane MeI</button>
-          <button class="btn tiny" type="button" data-preset="methane_dairy_production">Methane MeP</button>
+          <button class="btn tiny" type="button" data-preset="gs_years">GS vs phenotype (years)</button>
+          <button class="btn tiny" type="button" data-preset="holstein" title="Educational: the engine has no sexes, no overlapping generations and no bull/cow selection tiers, which drive Ne in real dairy populations.">Holstein dairy (educational)</button>
+          <button class="btn tiny" type="button" data-preset="methane_dairy_intensity" title="Educational multi-trait demo; see the Holstein caveat.">Methane MeI (educational)</button>
+          <button class="btn tiny" type="button" data-preset="methane_dairy_production" title="Educational multi-trait demo; see the Holstein caveat.">Methane MeP (educational)</button>
           <button class="btn tiny" id="resetFormBtn" type="button" style="margin-left:auto;">↺ Reset</button>
         </div>
 
@@ -153,6 +154,22 @@
               <span>1–200</span>
             </label>
             <input id="generations" type="number" min="1" max="200" value="30">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Cycle, years <span class="tip" tabindex="0" data-tip="Years per breeding cycle for phenotype-based strategies. 0 = no time axis (results per generation). With a value, the horizon is generations × cycle years and every strategy is compared at that calendar horizon.">?</span></span>
+              <span>0 = off</span>
+            </label>
+            <input id="cycle_years" type="number" min="0" max="30" step="0.5" value="0">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Genomic cycle, years <span class="tip" tabindex="0" data-tip="Years per cycle for the genomic-selection strategies (selection before phenotyping). 0 = same as the phenotypic cycle. A shorter cycle is the main real-world advantage of genomic selection.">?</span></span>
+              <span>GS strategies</span>
+            </label>
+            <input id="genomic_cycle_years" type="number" min="0" max="30" step="0.5" value="0">
           </div>
 
           <div class="field">

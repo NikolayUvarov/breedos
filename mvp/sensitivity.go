@@ -130,6 +130,8 @@ var validSensitivityAxes = map[string]func(*SimRequest, float64){
 	"heritability":      func(r *SimRequest, v float64) { r.Heritability = v },
 	"selection_percent": func(r *SimRequest, v float64) { r.SelectionPercent = v },
 	"generations":       func(r *SimRequest, v float64) { r.Generations = int(v + 0.5) },
+	// v0.8.4 — Issue 35. "Does the GS recommendation survive a slower genomic cycle?"
+	"genomic_cycle_years": func(r *SimRequest, v float64) { r.GenomicCycleYears = v },
 }
 
 const traitWeightAxisPrefix = "trait_weight:"

@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-10-20
+
+### Added — time axis: years per cycle, gain per year (Issue 35)
+
+Breeders reason in gain per year (ΔG/yr = i·r·σA / L). The main
+real-world advantage of genomic selection is a shorter cycle L, which a
+generations-only axis cannot show: there the GS mock was statistically
+identical to phenotypic selection.
+
+- New optional request fields:
+  - `cycle_years`: phenotype-based strategies; 0 = off, identical to before.
+  - `genomic_cycle_years`: the `genomic` and `imported_gebv` strategies;
+    defaults to `cycle_years`, i.e. no assumed advantage.
+- The horizon is `generations × cycle_years` years. Every strategy runs
+  as many of its own cycles as fit into it, so all are compared at the
+  same calendar horizon.
+- Outputs:
+  - `metrics[].year`;
+  - `final.years`, `final.gain_sigma_per_year`, `final.delta_f_per_year`;
+  - an interpretation line naming the fastest progress per year;
+  - a run note with each side's cycle and generation count.
+- Budget, validation (≤ 200 generations for the faster cycle) and the
+  client budget meter count the extra genomic generations. The new
+  sensitivity axis `genomic_cycle_years` answers "does the
+  recommendation survive a slower genomic cycle?".
+- Demo:
+  - "Cycle, years" and "Genomic cycle, years" inputs;
+  - charts switch to a year axis;
+  - the results table shows σA per year;
+  - new preset **GS vs phenotype (years)**: 5-year vs 2.5-year cycles over
+    30 years, equal per-cycle accuracy. GS reaches 6.8 σA against 4.3 σA
+    for phenotype truncation, at F 0.26 against 0.13, i.e. faster progress
+    and faster inbreeding per year.
+- Multi-trait runs label years but do not shorten genomic cycles: the
+  multi-trait path has no distinct genomic predictor.
+
+### Changed — dairy presets labelled educational (Issue 40)
+
+- Holstein and methane preset buttons now read "(educational)".
+- Runs on `holstein_synthetic` list a limitation: no sexes, no overlapping
+  generations, no bull/cow tiers or AI-sire concentration, i.e. the
+  drivers of Ne in real dairy populations.
+
+### Tests
+
+`timeaxis_test.go`:
+- equal cycles reproduce the generations-only results exactly;
+- a half-length genomic cycle runs twice the generations and wins gain per
+  year at a higher ΔF per year;
+- validation.
+
+Plus a dairy-limitation test.
+
 ## [0.8.3] - 2026-10-20
 
 ### Changed — typography and wording

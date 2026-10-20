@@ -107,6 +107,14 @@ type SimRequest struct {
 	// genomic-selection mock at generation 0. 0 → √h², the accuracy of
 	// phenotypic selection on the same trait.
 	GenomicAccuracy float64 `json:"genomic_accuracy,omitempty"`
+	// v0.8.4 — Issue 35. Time axis. CycleYears is the length of one
+	// breeding cycle for phenotype-based strategies; 0 keeps the
+	// generations-only axis. GenomicCycleYears is the cycle of the genomic
+	// strategies (default CycleYears, i.e. no assumed advantage). The
+	// horizon is Generations × CycleYears years and every strategy runs as
+	// many of its own cycles as fit into it.
+	CycleYears        float64 `json:"cycle_years,omitempty"`
+	GenomicCycleYears float64 `json:"genomic_cycle_years,omitempty"`
 }
 
 // v0.7.21 — Issue 18. Single trait's architecture within a multi-trait run.
@@ -221,6 +229,8 @@ type MetricPoint struct {
 	// (F[t] − F[t−1]) / (1 − F[t−1]) that Ne is derived from.
 	GainSigma float64 `json:"gain_sigma"`
 	DeltaF    float64 `json:"delta_f"`
+	// v0.8.4 — Issue 35. Calendar year of this generation (time axis on).
+	Year float64 `json:"year,omitempty"`
 }
 
 type FinalStats struct {
@@ -252,6 +262,11 @@ type FinalStats struct {
 	GeneticGainSigma float64 `json:"genetic_gain_sigma"`
 	MeanDeltaF       float64 `json:"mean_delta_f"`
 	Ne               float64 `json:"ne"`
+	// v0.8.4 — Issue 35. Populated when the time axis is on: horizon in
+	// years, gain in σA per year, and the per-year rate of inbreeding.
+	Years            float64 `json:"years,omitempty"`
+	GainSigmaPerYear float64 `json:"gain_sigma_per_year,omitempty"`
+	DeltaFPerYear    float64 `json:"delta_f_per_year,omitempty"`
 }
 
 type EditCandidate struct {
@@ -296,6 +311,42 @@ func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []f
 		gsErrVar: varG0 * (1 - acc*acc) / (acc * acc),
 		sigmaA0:  math.Sqrt(varG0),
 	}
+}
+
+// cycleYearsFor is a strategy's cycle length in years (0 = time axis off).
+// Genomic strategies use GenomicCycleYears in single-trait runs; multi-trait
+// runs have no distinct genomic predictor, so every strategy uses CycleYears.
+func cycleYearsFor(req SimRequest, cfg strategyConfig) float64 {
+	if req.CycleYears <= 0 {
+		return 0
+	}
+	if req.GenomicCycleYears > 0 && len(req.Traits) == 0 && (cfg.Rule == "genomic" || cfg.Rule == "imported_gebv") {
+		return req.GenomicCycleYears
+	}
+	return req.CycleYears
+}
+
+// generationsFor is how many of its own cycles a strategy runs: the request
+// horizon (Generations × CycleYears years) divided by its cycle length.
+func generationsFor(req SimRequest, cfg strategyConfig) int {
+	cycle := cycleYearsFor(req, cfg)
+	if cycle <= 0 {
+		return req.Generations
+	}
+	g := int(math.Round(float64(req.Generations) * req.CycleYears / cycle))
+	if g < 1 {
+		g = 1
+	}
+	return g
+}
+
+// maxGenerations bounds generationsFor over every strategy; the budget and
+// validation use it so the shorter genomic cycle cannot exceed the caps.
+func maxGenerations(req SimRequest) int {
+	if req.CycleYears > 0 && req.GenomicCycleYears > 0 && req.GenomicCycleYears < req.CycleYears && len(req.Traits) == 0 {
+		return generationsFor(req, strategyConfig{Rule: "genomic"})
+	}
+	return req.Generations
 }
 
 func environmentalVariance(varG0, h2 float64) float64 {
@@ -872,6 +923,13 @@ func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datase
 	if gm != nil {
 		notes = append(notes, fmt.Sprintf("Genome: %s; meiosis draws Poisson crossovers per chromosome (Haldane, no interference), so linkage and LD are simulated. Inbreeding F is identity by descent relative to the founders, tracked at %d loci; diversity is expected heterozygosity on all markers.", gm.source, len(gm.trackers)))
 	}
+	if req.CycleYears > 0 {
+		gcycle := req.CycleYears
+		if req.GenomicCycleYears > 0 && len(req.Traits) == 0 {
+			gcycle = req.GenomicCycleYears
+		}
+		notes = append(notes, fmt.Sprintf("Time axis: %g-year horizon. Phenotype-based strategies cycle every %g years (%d generations); genomic strategies every %g years (%d generations). Strategies are compared at the same calendar horizon; gain per year and ΔF per year are in the results.", float64(req.Generations)*req.CycleYears, req.CycleYears, req.Generations, gcycle, maxGenerations(req)))
+	}
 	notes = append(notes, fmt.Sprintf("Environmental variance is fixed at generation 0 (h² = %.2f in the founders); realised heritability falls as selection erodes genetic variance. Gain is reported both in trait units and in founder-σA units (gain_sigma).", req.Heritability))
 	if req.StrategySet == "advanced" {
 		acc := req.GenomicAccuracy
@@ -1007,7 +1065,10 @@ func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfi
 	strategyCount := len(strategies)
 	jobCount := strategyCount * req.Replicates
 	resultsByStrategy := make([][]StrategyResult, strategyCount)
-	totalSteps := jobCount * req.Generations
+	totalSteps := 0
+	for _, cfg := range strategies {
+		totalSteps += req.Replicates * generationsFor(req, cfg)
+	}
 	if totalSteps < 1 {
 		totalSteps = 1
 	}
@@ -1042,7 +1103,7 @@ func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfi
 		trackedCfg := strategies[trackIdx]
 		snapshot(AFSSnapshot{
 			Generation:       0,
-			TotalGenerations: req.Generations,
+			TotalGenerations: generationsFor(req, trackedCfg),
 			StrategyCode:     trackedCfg.Code,
 			StrategyName:     trackedCfg.Name,
 			Bins:             afsBinsFromPop(initial, req.Markers),
@@ -1080,11 +1141,11 @@ func simulateStrategiesDecisionEngine(req SimRequest, strategies []strategyConfi
 				res := simulateStrategy(req, task.Config, model, strategyPop, effects, baseFreq, baseDiversity, baseMean, rareUsefulAtStart, strategyRNG, func(gen int, currentPop []organism) {
 					done := atomic.AddInt64(&completedSteps, 1)
 					percent := 6 + int(math.Round(float64(done)*91.0/float64(totalSteps)))
-					reportProgress(progress, percent, fmt.Sprintf("parallel run: %d/%d strategy-generations complete; %s replicate %d/%d generation %d/%d", done, totalSteps, task.Config.Name, task.Replicate+1, req.Replicates, gen, req.Generations))
+					reportProgress(progress, percent, fmt.Sprintf("parallel run: %d/%d strategy-generations complete; %s replicate %d/%d generation %d/%d", done, totalSteps, task.Config.Name, task.Replicate+1, req.Replicates, gen, generationsFor(req, task.Config)))
 					if emitSnapshot {
 						snapshot(AFSSnapshot{
 							Generation:       gen,
-							TotalGenerations: req.Generations,
+							TotalGenerations: generationsFor(req, task.Config),
 							StrategyCode:     task.Config.Code,
 							StrategyName:     task.Config.Name,
 							Bins:             afsBinsFromPop(currentPop, req.Markers),
@@ -1185,7 +1246,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 			parents += float64(p.EffectiveParents)
 		}
 		den := float64(len(reps))
-		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
+		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
 	}
 	// v0.7.20 — Issue 20. Fill in Ne[t] = 1 / (2 ΔF) over the metrics slice.
 	populateNeTrajectory(metrics)
@@ -1221,6 +1282,11 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	final := FinalStats{TraitMean: finalMetric.TraitMean, GeneticGain: finalMetric.GeneticGain, Diversity: finalMetric.Diversity, Inbreeding: finalMetric.Inbreeding, AlleleDrift: finalMetric.AlleleDrift, RareUsefulLost: finalMetric.RareUsefulLost, FixedLoci: finalMetric.FixedLoci, FavorableFixed: finalMetric.FavorableFixed, UnfavorableFixed: finalMetric.UnfavorableFixed, EffectiveParents: finalMetric.EffectiveParents, Replicates: len(reps), GainStd: round4(stddev(gains)), DiversityStd: round4(stddev(divs)), InbreedingStd: round4(stddev(inbr)), ProbabilityInbreedingBreach: round4(float64(inbreedingBreaches) / float64(len(reps))), ProbabilityDiversityCollapse: round4(float64(diversityCollapses) / float64(len(reps))), ProbabilityRareUsefulLoss: round4(float64(rareLossEvents) / float64(len(reps)))}
 	final.GeneticGainSigma = finalMetric.GainSigma
 	final.MeanDeltaF, final.Ne = meanInbreedingRate(finalMetric.Inbreeding, finalMetric.Generation)
+	if finalMetric.Year > 0 {
+		final.Years = finalMetric.Year
+		final.GainSigmaPerYear = round4(finalMetric.GainSigma / finalMetric.Year)
+		final.DeltaFPerYear = round4(1 - math.Pow(math.Max(1-finalMetric.Inbreeding, 1e-12), 1/finalMetric.Year))
+	}
 	final.RecommendedNext = recommendationFor(cfg.Code, final)
 	return StrategyResult{Name: cfg.Name, Code: cfg.Code, Summary: cfg.Summary, Replicates: len(reps), Metrics: metrics, Final: final}
 }
@@ -1431,6 +1497,22 @@ func buildDecisionSummary(req SimRequest, results []StrategyResult, baseDiversit
 		}
 	} else {
 		interpretation = append(interpretation, "No hard constraints supplied — the ranking is purely risk-adjusted. Add constraints (max inbreeding, min gain, etc.) to filter to feasible strategies only.")
+	}
+	// v0.8.4 — Issue 35. With a time axis, name the best gain per year.
+	if req.CycleYears > 0 {
+		bestRate := -1
+		for i := range results {
+			if isBaselineStrategy(results[i].Code) {
+				continue
+			}
+			if bestRate < 0 || results[i].Final.GainSigmaPerYear > results[bestRate].Final.GainSigmaPerYear {
+				bestRate = i
+			}
+		}
+		if bestRate >= 0 {
+			r := results[bestRate].Final
+			interpretation = append(interpretation, fmt.Sprintf("Fastest progress per year: %s, %.3f σA/year over %g years (ΔF %.2f%% per year, final F %.3f).", results[bestRate].Name, r.GainSigmaPerYear, r.Years, 100*r.DeltaFPerYear, r.Inbreeding))
+		}
 	}
 	interpretation = append(interpretation, "Use the Pareto chart to choose a trade-off, not a single metric. Real BreedOS should optimize under explicit constraints supplied by the breeding program.")
 	// v0.7.20 — Issue 21. Inbreeding-cost note. Only meaningful when the
@@ -1691,12 +1773,17 @@ func buildLimitations(req SimRequest) []string {
 	out := []string{
 		"Diploid biallelic markers; no copy-number variation, no structural variants.",
 		"Recombination follows a genetic map with Poisson crossovers (Haldane, no crossover interference); without dataset positions the map is synthetic (evenly spaced markers on equal-length chromosomes).",
-		"One random-mating outcrossing population with equal parent contributions: no selfing, doubled haploids, hybrids, sexes, overlapping generations, or trial stages; generations are not converted to years or cost.",
+		"One random-mating outcrossing population with equal parent contributions: no selfing, doubled haploids, hybrids, sexes, overlapping generations, or trial stages. Cycle length in years is an input (cycle_years); costs are not modelled.",
 		"Additive trait architecture only; no dominance, no epistasis, no pleiotropy.",
 		"No genotype-by-environment (GxE) interaction; trait expression treated as environment-invariant.",
 		"No production genomic-prediction model (GBLUP / Bayesian / ML); the predictor is a mock signal for demonstration only.",
 		germplasmStmt,
 		"Risk thresholds are user-set, not learned from program history.",
+	}
+	// v0.8.4 — Issue 40. Dairy runs are educational: what drives Ne in a
+	// real dairy population is absent from this engine.
+	if strings.EqualFold(req.Dataset, "holstein_synthetic") {
+		out = append(out, "Dairy runs are educational: no sexes, no overlapping generations, no bull/cow selection tiers or AI-sire concentration — the factors that drive Ne in real dairy populations. Do not use for herd decisions.")
 	}
 	if req.CrisprEnabled {
 		out = append(out,
@@ -1892,6 +1979,15 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	if req.GenomicAccuracy < 0 || req.GenomicAccuracy > 1 {
 		return errors.New("genomic_accuracy must be in (0, 1]; 0 or omitted means √h²")
 	}
+	if req.CycleYears < 0 || req.CycleYears > 30 || req.GenomicCycleYears < 0 || req.GenomicCycleYears > 30 {
+		return errors.New("cycle_years and genomic_cycle_years must be between 0 and 30 years (0 = no time axis / same as cycle_years)")
+	}
+	if req.GenomicCycleYears > 0 && req.CycleYears <= 0 {
+		return errors.New("genomic_cycle_years needs cycle_years: set the phenotypic cycle length first")
+	}
+	if g := maxGenerations(req); g > 200 {
+		return fmt.Errorf("the genomic cycle fits %d generations into the %g-year horizon; the limit is 200 — shorten generations or lengthen genomic_cycle_years", g, float64(req.Generations)*req.CycleYears)
+	}
 	if req.Heritability <= 0 || req.Heritability > 1 {
 		return errors.New("heritability must be in (0, 1]")
 	}
@@ -1943,7 +2039,9 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	return nil
 }
 func simulationBudget(req SimRequest, strategyCount int) int64 {
-	return int64(req.PopulationSize) * int64(req.Markers) * int64(req.Generations+1) * int64(strategyCount) * int64(req.Replicates)
+	// v0.8.4: maxGenerations so a shorter genomic cycle (Issue 35) is
+	// counted; conservative for the strategies on the longer cycle.
+	return int64(req.PopulationSize) * int64(req.Markers) * int64(maxGenerations(req)+1) * int64(strategyCount) * int64(req.Replicates)
 }
 
 // v0.7.20 — Issue 20. Cap on effective population size used to keep the
@@ -2067,10 +2165,13 @@ func clonePopulation(pop []organism) []organism {
 func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
 	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0))
-	for gen := 1; gen <= req.Generations; gen++ {
+	cycle := cycleYearsFor(req, cfg)
+	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents := selectParents(pop, effects, req, cfg, model, rng, gen)
 		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
-		metrics = append(metrics, computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, len(parents)))
+		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, len(parents))
+		m.Year = round4(float64(gen) * cycle)
+		metrics = append(metrics, m)
 		if progress != nil {
 			progress(gen, pop)
 		}

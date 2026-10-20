@@ -324,7 +324,8 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTrai
 	}
 
 	appendGen(0, 0)
-	for gen := 1; gen <= req.Generations; gen++ {
+	cycle := cycleYearsFor(req, cfg)
+	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents, idx := selectParentsMultiTrait(pop, effects, traits, req, cfg, mm, rng)
 		var meanIdx float64
 		if len(parents) > 0 && len(idx) > 0 {
@@ -336,6 +337,7 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTrai
 		indexHistory = append(indexHistory, round4(meanIdx))
 		pop = makeNextGeneration(pop, parents, mm.genome, req.MutationRate, rng, cfg.MatingRule)
 		appendGen(gen, len(parents))
+		metrics[len(metrics)-1].Year = round4(float64(gen) * cycle)
 	}
 	populateNeOnAggregate()
 

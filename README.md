@@ -22,6 +22,7 @@ BreedOS runs Monte Carlo simulations of a breeding population under competing se
 - **Inbreeding by descent.** Every founder haplotype is labelled at up to 512 tracker loci. F is the probability that two allele copies in the population are identical by descent (IBD) relative to the founders, so selecting on observed marker state cannot lower it. Diversity (expected heterozygosity) is reported separately.
 - **Fixed environment.** Environmental variance is set once from h² and the founder genetic variance. As selection erodes VG, realised heritability, and with it the accuracy of phenotypic selection, falls.
 - **Interpretable units.** Gain is reported in trait units and in founder-σA units. ΔF per generation and Ne = 1/(2ΔF) are reported for every strategy.
+- **Calendar time (optional).** With `cycle_years` set, every strategy runs as many of its own cycles as fit into the same horizon. Genomic strategies can cycle faster (`genomic_cycle_years`). Results add gain per year and ΔF per year, and the charts switch to a year axis.
 - Additive QTL effects; optional multi-trait selection indices with genetic correlations.
 
 ### Strategies
@@ -46,7 +47,7 @@ Core mode runs a four-strategy subset (plus the CRISPR strategy when enabled); a
 
 ### What it does not model yet
 
-- **Time and cost.** Generations are not converted to years or cost per cycle, so the main real-world advantage of genomic selection (a shorter cycle) is not visible.
+- **Cost.** Cycle length in years is an input (`cycle_years`, `genomic_cycle_years`), but the cost per cycle is not modelled.
 - **Breeding-program structure.** There is no selfing, doubled haploids, hybrids or trial stages, no sexes and no overlapping generations.
 - **Genotype × environment interaction.** Climate stress is a uniform penalty on the trait mean.
 - **Prediction and phenotypes.** There is no production GBLUP model, and uploaded phenotypes and pedigrees are parsed but not yet used by the engine.
@@ -142,7 +143,9 @@ Minimal request (omitted fields take defaults):
 }
 ```
 
-`selection_percent` is a percent on a 0–100 scale (`20` = 20%). Values below 1 are rejected. Optional genome fields: `chromosomes` (default 10), `chromosome_length_morgans` (default 1.0), `genomic_accuracy` (default √h²). Request and response shapes live in the handler types at the top of `mvp/main.go`.
+`selection_percent` is a percent on a 0–100 scale (`20` = 20%). Values below 1 are rejected. Optional fields:
+- genome: `chromosomes` (default 10), `chromosome_length_morgans` (default 1.0), `genomic_accuracy` (default √h²);
+- time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`). Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
 Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages. Marker positions are read from a `# Sites (chrom:pos), ...` comment line followed by `# chrom:pos, chrom:pos, ...`, or from `chrom:pos` header labels. Markers must be ordered by chromosome and position.
 

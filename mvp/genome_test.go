@@ -293,3 +293,20 @@ func TestBaselinesNeverRecommended(t *testing.T) {
 		}
 	}
 }
+
+func TestDairyRunsCarryEducationalLimitation(t *testing.T) {
+	req := SimRequest{Seed: 2, Dataset: "holstein_synthetic", PopulationSize: 100, Markers: 300, QTLCount: 20, Generations: 3, SelectionPercent: 12, Heritability: 0.36, StrategySet: "core", Replicates: 1}
+	resp, err := runSimulation(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, l := range resp.Decision.Limitations {
+		if strings.HasPrefix(l, "Dairy runs are educational") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("holstein_synthetic runs must state the educational limitation")
+	}
+}
