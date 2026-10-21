@@ -260,10 +260,22 @@ function setFormValues(values) {
     // v0.8.5: the request carries ΔF as a fraction; the field is in percent.
     else if (id === 'target_delta_f') el.value = String(Math.round(Number(value) * 1e6) / 1e4);
     else if (Array.isArray(value)) el.value = value.join(', ');
+    else if (id === 'dataset') {
+      // v0.8.16. A run's echoed request has dataset '' with an upload id;
+      // writing '' blanked the selector, and its change handler dropped
+      // the upload, so the second run failed. Map it back, keep values
+      // the selector does not offer (a private table after logout), and
+      // fire change only on a real change.
+      const v = value === '' && values.upload ? '__upload__' : String(value || 'synthetic');
+      if (![...el.options].some(o => o.value === v) || el.value === v) continue;
+      el.value = v;
+      el.dispatchEvent(new Event('change'));
+      continue;
+    }
     else el.value = String(value);
     // v0.8.0: presets now carry a dataset; let the selector's handler
     // hide the upload panel when a preset switches away from uploads.
-    if (id === 'dataset') el.dispatchEvent(new Event('change'));
+    // (dataset handled above)
   }
   updateBudgetMeter();
   refreshSelectionIndexComposer();

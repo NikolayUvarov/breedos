@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.16] - 2026-10-21
+
+### Fixed — second run after an upload failed
+
+After a run on an uploaded table the form was refilled from the echoed
+request, whose dataset is empty for uploads; the selector went blank and
+its handler dropped the upload, so changing a parameter and pressing Run
+again answered "target_loci names gene columns…: upload one". The
+selector now maps the echoed request back to "Uploaded CSVs" and keeps
+the upload.
+
 ## [0.8.15] - 2026-10-21
 
 ### Fixed — private login behind the production proxy
