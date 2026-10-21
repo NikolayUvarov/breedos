@@ -67,8 +67,8 @@ func TestPrivateLoginAndDatasets(t *testing.T) {
 	rec = httptest.NewRecorder()
 	privateHandler(rec, req)
 	cookies := rec.Result().Cookies()
-	if rec.Code != http.StatusSeeOther || len(cookies) != 1 || cookies[0].Name != privateCookie {
-		t.Fatalf("login should redirect with a session cookie: %d %v", rec.Code, cookies)
+	if rec.Code != 200 || len(cookies) != 1 || cookies[0].Name != privateCookie || !strings.Contains(rec.Body.String(), `url=/private`) {
+		t.Fatalf("login should answer 200 with a session cookie and move on to /private: %d %v", rec.Code, cookies)
 	}
 	withSession := func(method, path string) *http.Request {
 		r := httptest.NewRequest(method, path, nil)

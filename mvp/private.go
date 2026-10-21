@@ -288,10 +288,12 @@ func privateHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "session: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		http.Redirect(w, r, "/private", http.StatusSeeOther)
+		// No server redirect: the production proxy follows 3xx itself
+		// and drops the Set-Cookie of the redirect response.
+		writePrivateContinue(w, "Logged in.")
 	case r.URL.Path == "/private/logout":
 		http.SetCookie(w, &http.Cookie{Name: privateCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
-		http.Redirect(w, r, "/private", http.StatusSeeOther)
+		writePrivateContinue(w, "Logged out.")
 	case strings.HasPrefix(r.URL.Path, "/private/data/"):
 		if user == "" {
 			http.Error(w, "log in at /private first", http.StatusUnauthorized)
@@ -336,6 +338,14 @@ func writePrivateLogin(w http.ResponseWriter, msg string) {
 		errLine = `<p class="err">` + html.EscapeString(msg) + `</p>`
 	}
 	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BreedOS private</title>%s</head><body><main><h1>Private data room</h1><p class="muted">Tables here are not public and are shown only in person. Log in to continue.</p>%s<form method="post" action="/private/login"><p><input name="user" placeholder="login" autocomplete="username" required></p><p><input name="password" type="password" placeholder="password" autocomplete="current-password" required></p><p><button type="submit">Log in</button></p></form><p class="muted"><a href="/">BreedOS</a></p></main></body></html>`, privateStyle, errLine)
+}
+
+// writePrivateContinue is a 200 page that carries the cookie change and
+// moves on to /private from the browser side.
+func writePrivateContinue(w http.ResponseWriter, msg string) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/private"><title>BreedOS private</title>%s</head><body><main><p>%s <a href="/private">Continue</a></p></main></body></html>`, privateStyle, html.EscapeString(msg))
 }
 
 func writePrivateRoom(w http.ResponseWriter, user string) {

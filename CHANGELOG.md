@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.15] - 2026-10-21
+
+### Fixed — private login behind the production proxy
+
+The login answered with a 303 redirect carrying the session cookie; the
+production proxy follows redirects itself and returned the final page
+without the cookie, so no login succeeded on breedos.org. Login and
+logout now answer 200 with the cookie and move on to `/private` from
+the page.
+
 ## [0.8.14] - 2026-10-21
 
 ### Fixed — v0.8.13 demo refused runs without target genes
