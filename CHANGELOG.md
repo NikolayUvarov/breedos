@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.17] - 2026-10-21
+
+### Fixed — upload panel spilled over the results column
+
+The upload card inside the 360 px input panel laid its file inputs out
+in two columns with long labels and grew to 790 px, painting over the
+results. It now stacks the inputs in one column and everything inside
+shrinks to the panel; the per-locus table scrolls inside its box.
+
 ## [0.8.16] - 2026-10-21
 
 ### Fixed — second run after an upload failed

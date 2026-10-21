@@ -380,6 +380,16 @@ textarea {
   position: sticky;
   top: 14px;
 }
+/* v0.8.17: the upload panel is a flex child of the 360px panel; its
+   two-column file grid and long labels made the card 790px wide and
+   painted it over the results column. Everything inside must shrink. */
+.sticky-panel .card { min-width: 0; max-width: 100%; }
+#uploadField { min-width: 0; }
+#uploadField .upload-inputs > label { display: block; min-width: 0; }
+#uploadField select, #uploadField input[type="number"] { max-width: 100%; box-sizing: border-box; }
+#uploadField input[type="file"] { display: block; width: 100%; max-width: 100%; box-sizing: border-box; }
+#uploadField p, #uploadField label, #uploadField div, #uploadField code { overflow-wrap: anywhere; }
+#uploadField table { width: 100%; }
 .preset-row {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
