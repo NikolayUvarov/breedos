@@ -182,8 +182,9 @@ func TestLinkedMarkerPyramidReportsRecombinants(t *testing.T) {
 	if !found {
 		t.Fatalf("interpretation should state the marker distance: %v", linked.Decision.Interpretation)
 	}
-	if _, err := runSimulation(SimRequest{Seed: 1, PopulationSize: 50, Markers: 100, QTLCount: 10, Generations: 2, SelectionPercent: 20, Heritability: 0.4, StrategySet: "core", Replicates: 1, MarkerDistanceCM: 5}); err == nil {
-		t.Fatal("marker_distance_cm without targets must be rejected")
+	// v0.8.14: without targets the distance is ignored, not an error.
+	if plain, err := runSimulation(SimRequest{Seed: 1, PopulationSize: 50, Markers: 100, QTLCount: 10, Generations: 2, SelectionPercent: 20, Heritability: 0.4, StrategySet: "core", Replicates: 1, MarkerDistanceCM: 5}); err != nil || plain.Request.Markers != 100 {
+		t.Fatalf("marker_distance_cm without targets must be ignored: %v", err)
 	}
 }
 
@@ -257,5 +258,18 @@ func TestMABCNamedRecurrentParent(t *testing.T) {
 	req.RecurrentParent = "no_such_line"
 	if _, err := runSimulation(req); err == nil || !strings.Contains(err.Error(), "no_such_line") {
 		t.Fatalf("unknown recurrent parent must be rejected by name, got %v", err)
+	}
+}
+
+// v0.8.14. Pyramiding controls without target genes are ignored, not an
+// error (the demo form always sends them).
+func TestPyramidControlsIgnoredWithoutTargets(t *testing.T) {
+	req := SimRequest{Seed: 1, PopulationSize: 60, Markers: 120, QTLCount: 10, Generations: 3, SelectionPercent: 20, Heritability: 0.4, StrategySet: "core", Replicates: 1, BackcrossGenerations: 3, MarkerDistanceCM: 2, RecurrentParent: "x"}
+	resp, err := runSimulation(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if findByCode(resp.Strategies, "mabc") != nil || resp.Request.BackcrossGenerations != 0 {
+		t.Fatalf("no MABC and no backcrosses without targets: %+v", resp.Request)
 	}
 }

@@ -272,6 +272,10 @@ func sensitivityStartHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := authorizePrivateDataset(r, req.Base.Dataset); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	normalizeRequest(&req.Base)
 	if err := validateSensitivityRequest(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

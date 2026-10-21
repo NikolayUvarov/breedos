@@ -68,6 +68,13 @@ const BUDGET_INPUT_IDS = ['population_size', 'markers', 'generations', 'replicat
 
 function byId(id) { return document.getElementById(id); }
 
+// v0.8.14. The pyramiding controls are sent only with target genes.
+function pyramidOn() {
+  const genes = Math.trunc(numberValue('pyramid_genes')) > 0;
+  const loci = String((byId('target_loci') && byId('target_loci').value) || '').trim() !== '';
+  return genes || loci;
+}
+
 function numberValue(id) {
   const el = byId(id);
   if (!el) return 0;
@@ -99,9 +106,9 @@ function requestFromForm() {
     ploidy: (dsVal === 'synthetic' || !dsVal) ? (Math.trunc(numberValue('ploidy')) || 2) : 0,
     pyramid_genes: Math.trunc(numberValue('pyramid_genes')),
     target_loci: String((byId('target_loci') && byId('target_loci').value) || '').split(',').map(x => x.trim()).filter(Boolean),
-    marker_distance_cm: numberValue('marker_distance_cm'),
-    backcross_generations: Math.trunc(numberValue('backcross_generations')),
-    recurrent_parent: String((byId('recurrent_parent') && byId('recurrent_parent').value) || '').trim(),
+    marker_distance_cm: pyramidOn() ? numberValue('marker_distance_cm') : 0,
+    backcross_generations: pyramidOn() ? Math.trunc(numberValue('backcross_generations')) : 0,
+    recurrent_parent: pyramidOn() ? String((byId('recurrent_parent') && byId('recurrent_parent').value) || '').trim() : '',
     selection_percent: numberValue('selection_percent'),
     heritability: numberValue('heritability'),
     mutation_rate: numberValue('mutation_rate'),
@@ -2236,8 +2243,34 @@ window.addEventListener('DOMContentLoaded', () => {
   // multipart POST, render the import summary.
   setupUploadUI();
   setupFounderSet();
+  setupPrivateDatasets();
   setStatus('Ready. Press Run simulation to calculate.', '');
 });
+
+// v0.8.14. Private tables (after a login at /private) join the founder
+// population list as "Private: <file>"; ?private=<file> preselects one.
+async function setupPrivateDatasets() {
+  const sel = byId('dataset');
+  if (!sel) return;
+  try {
+    const res = await fetch('/api/private/datasets', {cache: 'no-store'});
+    if (!res.ok) return;
+    const d = await res.json();
+    const want = new URLSearchParams(location.search).get('private');
+    const upload = [...sel.options].find(o => o.value === '__upload__');
+    (d.datasets || []).forEach(x => {
+      const o = document.createElement('option');
+      o.value = 'private:' + x.name;
+      o.textContent = 'Private: ' + x.name + (x.loci ? ` (${x.individuals} × ${x.loci} SSR)` : x.individuals ? ` (${x.individuals} × ${x.markers})` : '');
+      sel.insertBefore(o, upload || null);
+    });
+    if (want && [...sel.options].some(o => o.value === 'private:' + want)) {
+      sel.value = 'private:' + want;
+      sel.dispatchEvent(new Event('change'));
+      markDirty('private table selected');
+    }
+  } catch (e) { /* no private area or not logged in */ }
+}
 
 function setupUploadUI() {
   const datasetSel = byId('dataset');

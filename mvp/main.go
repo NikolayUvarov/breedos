@@ -546,7 +546,17 @@ func main() {
 	listen := flag.String("listen", ":8080", "HTTP listen address, for example :8080 or 127.0.0.1:8080")
 	selfCheck := flag.Bool("self-check", false, "print OK and exit (used by the self-update contract)")
 	acmeWebroot := flag.String("acme-webroot", "auto", "webroot whose .well-known/acme-challenge/ files are served for certificate renewal; auto = <binary dir>/../html, off = disabled")
+	privateHashSpec := flag.String("private-hash", "", "print a private/auth line for user:password and exit")
 	flag.Parse()
+	if *privateHashSpec != "" {
+		line, err := privateHashCommand(*privateHashSpec)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		fmt.Println(line)
+		return
+	}
 	if *selfCheck {
 		fmt.Println("OK")
 		os.Exit(0)
@@ -579,6 +589,10 @@ func main() {
 	// v0.7.26 — Issue 05. Minimal upload workflow.
 	mux.HandleFunc("/api/upload", uploadHandler)
 	mux.HandleFunc("/api/founder-set", founderSetHandler) // v0.8.12
+	// v0.8.14. Private data room: login, table list, download.
+	mux.HandleFunc("/private", privateHandler)
+	mux.HandleFunc("/private/", privateHandler)
+	mux.HandleFunc("/api/private/datasets", privateDatasetsHandler)
 	// v0.7.26 — Issue 05. Static fixture files for the example links on
 	// the demo upload form. Embedded; only the four toy CSVs are served.
 	mux.HandleFunc("/upload-fixture/", uploadFixtureHandler)
@@ -658,6 +672,10 @@ func simulateHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := authorizePrivateDataset(r, req.Dataset); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
 	resp, err := runSimulation(req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -680,6 +698,10 @@ func startSimulationJobHandler(w http.ResponseWriter, r *http.Request) {
 	req, err := decodeSimRequest(r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := authorizePrivateDataset(r, req.Dataset); err != nil {
+		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
 	normalizeRequest(&req)
@@ -2390,6 +2412,12 @@ func norm(v, minV, maxV float64) float64 {
 }
 
 func normalizeRequest(req *SimRequest) {
+	// v0.8.14. The pyramiding controls mean nothing without target genes;
+	// a form that always sends them must not make an ordinary run fail
+	// (the v0.8.13 demo did).
+	if !pyramidRequested(*req) {
+		req.MarkerDistanceCM, req.BackcrossGenerations, req.RecurrentParent = 0, 0, ""
+	}
 	if req.Seed == 0 {
 		req.Seed = time.Now().UnixNano() % 1000000000
 	}

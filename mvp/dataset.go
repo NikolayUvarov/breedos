@@ -97,6 +97,20 @@ func loadDatasetUncached(name string) (*loadedDataset, error) {
 	if name == "holstein_synthetic" {
 		return synthHolsteinFounders(500, 2000, holsteinSynthGenSeed()), nil
 	}
+	// v0.8.14. Private tables (private/data/<file>); the handlers check
+	// the session before a request gets here.
+	if path, ok := privateDatasetFile(name); ok {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("private dataset %q: %w", name, err)
+		}
+		ds, err := parseDatasetCSV(data, filepath.Base(path))
+		if err != nil {
+			return nil, fmt.Errorf("private dataset %q parse failed: %w", name, err)
+		}
+		ds.external = true
+		return ds, nil
+	}
 	// 1) External file next to the running binary, in ./data/<name>.csv.
 	//    This is the production layout: deploy_breedos.sh uploads large CSVs
 	//    here instead of embedding them in the binary.

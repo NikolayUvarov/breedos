@@ -204,6 +204,10 @@ When an upload also carries a phenotype CSV (`id,trait`) for at least 20 of the 
 
 Founders can be phenotyped or unphenotyped lines of the same genotype file. Marker positions are read from a `# Sites (chrom:pos), ...` comment line followed by `# chrom:pos, chrom:pos, ...`, or from `chrom:pos` header labels. Markers must be ordered by chromosome and position.
 
+## Private data room
+
+Tables that may not be published can be shown in person without publishing them. Put CSV files (genotype tables, as for uploads) in `private/data/` next to the binary and users in `private/auth`, one `user:sha256(user:password)` per line (`./breedos -private-hash user:password` prints one). `/private` asks for the login; logged in, it lists the tables, and the demo offers them under Founder population as "Private: <file>" (`dataset: "private:<file>"`), for that browser session only. Without `private/auth` the route answers 404.
+
 ## Project structure
 
 ```
@@ -227,6 +231,7 @@ breedos/
     ├── pyramid.go        gene pyramiding targets, MAS scoring, linked markers, pyramid report
     ├── mabc.go           marker-assisted backcrossing (recurrent parent, background selection)
     ├── founders.go       founder set (maximum allele coverage) from an uploaded table
+    ├── private.go        private data room: login, sessions, private tables
     ├── effects.go, ocs.go, gxe.go   rrBLUP effects, optimum contributions, climate G×E
     ├── promptbio/        separate experimental substrate; not used by the breeding engine
     └── static/           frontend (vanilla JS, no framework)

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.14] - 2026-10-21
+
+### Fixed — v0.8.13 demo refused runs without target genes
+
+The form sent `backcross_generations: 3` with every run and the server
+answered "backcross_generations needs target genes". The pyramiding
+controls are now ignored by the server when no target genes are set,
+and the demo sends them only with target genes.
+
+### Added — private data room
+
+Some conversations run on tables that may not be published.
+
+- `/private` asks for a login and password (a footer link on the landing
+  pages). Logged in, it lists the CSV tables in `<binary dir>/private/data/`
+  with a parse summary, a download link and "open in demo".
+- In the demo the tables appear under Founder population as
+  "Private: <file>" (`dataset: "private:<file>"`), for the browser
+  session only; `/demo?private=<file>` preselects one. `/api/simulate`,
+  `/api/simulate/start` and `/api/sensitivity/start` refuse a private
+  table without the session (403).
+- Sessions are HMAC-signed cookies (12 h, HttpOnly, SameSite=Lax, Secure
+  off loopback) with a secret created in `private/secret`. Users live in
+  `private/auth` as `user:sha256(user:password)`; `breedos -private-hash
+  user:password` prints a line. Failed logins wait a second and are
+  limited to 20 per address per hour. Nothing on the pages names a
+  person or a source.
+
 ## [0.8.13] - 2026-10-21
 
 ### Added — marker-assisted backcrossing (MABC)
