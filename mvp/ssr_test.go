@@ -62,10 +62,16 @@ func TestSSRLociWithDigitsAreNotPaired(t *testing.T) {
 	}
 }
 
-func TestSSRPolyploidRejected(t *testing.T) {
-	_, err := parseDatasetCSV([]byte("id,STM1\nA,150/152/158\nB,150\n"), "potato.csv")
-	if err == nil || !strings.Contains(err.Error(), "polyploid") {
-		t.Fatalf("tetraploid profile must be rejected with a clear message, got %v", err)
+func TestSSRPloidyDetection(t *testing.T) {
+	ds, err := parseDatasetCSV([]byte("id,STM1\nA,150/152/158\nB,150\n"), "potato.csv")
+	if err != nil || ds.ploidy != 4 || ds.ssr.Ploidy != 4 {
+		t.Fatalf("3 alleles in a cell should be read as tetraploid: %v %+v", err, ds)
+	}
+	if _, err := parseDatasetCSVPloidy([]byte("id,STM1\nA,150/152/158\nB,150\n"), "potato.csv", 2); err == nil || !strings.Contains(err.Error(), "ploidy 4") {
+		t.Fatalf("declared diploid with 3 alleles must point to ploidy 4, got %v", err)
+	}
+	if _, err := parseDatasetCSV([]byte("id,X\nA,1/2/3/4/5\nB,1\n"), "hexa.csv"); err == nil || !strings.Contains(err.Error(), "at most 4") {
+		t.Fatalf("more than 4 alleles must be rejected, got %v", err)
 	}
 }
 
@@ -255,5 +261,47 @@ func TestDosageTableWithSemicolons(t *testing.T) {
 	ds, err := parseDatasetCSV([]byte("id;m1;m2\nA;0;2\nB;1;1\n"), "excel-ru.csv")
 	if err != nil || ds.markerCount != 2 || ds.layout != nil {
 		t.Fatalf("semicolon 0/1/2 table: %v %+v", err, ds)
+	}
+}
+
+// v0.8.11 — layouts of published sorghum collection tables (Dryad,
+// PLoS supplements) that were silently misread before.
+func TestSSRCollectionLayouts(t *testing.T) {
+	cases := []struct {
+		name, raw, format string
+		loci, imputed     int
+		ignored           string
+	}{
+		{"allele-word headers, 999 missing", "ID_genet,gpsb223_allele 1,gpsb223_allele 2,sb4-72_allele 1,sb4-72_allele 2\n1,108,110,183,183\n2,108,108,999,999\n3,110,110,185,183\n", "two columns per locus", 2, 1, ""},
+		{"packed 3+3 digits", "Accession,gpsb123,Xcup02\n2205,304304,000000\n2260,299302,209209\n2261,96096,220209\n", "one column per locus, alleles packed as 3+3 digits", 2, 1, ""},
+		{"description columns among loci", "Sample_ID,farm_ID,site,variety,sb4.72,xcup02,xcup53,xtxp10\nS-1,GSU8-3,L1,Mugeta,183183,198198,194194,145145\nS-2,GSU8-4,L2,Ngoti,191191,198200,194196,145147\n", "one column per locus, alleles packed as 3+3 digits", 4, 0, "farm_ID,site,variety"},
+		{"species column before repeated headers", "genotype,species,p1,p1,p5,p5\nT2,s.sorghum,186,186,216,216\nT3,s.sorghum,186,190,216,220\n", "two columns per locus", 2, 0, "species"},
+	}
+	for _, c := range cases {
+		ds, err := parseDatasetCSV([]byte(c.raw), c.name)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if ds.ssr.Format != c.format || ds.layout.loci() != c.loci || ds.ssr.ImputedCalls != c.imputed || strings.Join(ds.ssr.IgnoredColumns, ",") != c.ignored {
+			t.Fatalf("%s: format %q loci %v imputed %d ignored %v", c.name, ds.ssr.Format, ds.layout.names, ds.ssr.ImputedCalls, ds.ssr.IgnoredColumns)
+		}
+		if ds.ssr.ObservedHet == 0 {
+			t.Fatalf("%s: heterozygous calls lost (pairs not read)", c.name)
+		}
+	}
+	if u, _ := unpackAlleles("96096"); u != "96/96" {
+		t.Fatalf("96096 unpacked to %q, want 96/96", u)
+	}
+}
+
+// A table without any heterozygous call is flagged: unrecognised paired
+// headers read each column as its own homozygous locus.
+func TestSSRWarnsWithoutHeterozygotes(t *testing.T) {
+	ds, err := parseDatasetCSV([]byte("id,RM1 first,RM1 second\nA,103,107\nB,107,107\nC,103,103\n"), "x.csv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ds.ssr.Warnings) == 0 {
+		t.Fatalf("expected a no-heterozygote warning, got none (format %q, loci %v)", ds.ssr.Format, ds.layout.names)
 	}
 }

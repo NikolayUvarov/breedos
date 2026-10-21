@@ -47,7 +47,8 @@ func coancestryMatrix(pop []organism, ids []int) [][]float64 {
 	if k == 0 || len(pop[ids[0]].ibd) == 0 {
 		return F
 	}
-	T := len(pop[ids[0]].ibd) / 2
+	ploidy := ploidyOf(pop)
+	T := len(pop[ids[0]].ibd) / ploidy
 	stride := 1
 	if T > ocsMaxTrackers {
 		stride = T / ocsMaxTrackers
@@ -62,21 +63,15 @@ func coancestryMatrix(pop []organism, ids []int) [][]float64 {
 			b := pop[ids[y]].ibd
 			var same float64
 			for t := 0; t < T; t += stride {
-				aA, aB, bA, bB := a[t], a[T+t], b[t], b[T+t]
-				if aA == bA {
-					same++
-				}
-				if aA == bB {
-					same++
-				}
-				if aB == bA {
-					same++
-				}
-				if aB == bB {
-					same++
+				for s := 0; s < ploidy; s++ {
+					for u := 0; u < ploidy; u++ {
+						if a[s*T+t] == b[u*T+t] {
+							same++
+						}
+					}
 				}
 			}
-			f := same / (4 * used)
+			f := same / (float64(ploidy*ploidy) * used)
 			F[x][y], F[y][x] = f, f
 		}
 	}

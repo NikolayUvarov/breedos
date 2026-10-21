@@ -309,11 +309,11 @@ func simulateMultiTraitStrategy(req SimRequest, cfg strategyConfig, mm multiTrai
 
 	appendGen := func(gen int, eff int) {
 		// Aggregate metric on trait 0 (headline).
-		metrics = append(metrics, computeMetrics(gen, pop, primaryEffects, baseFreq, baseDiversity, primaryBaseMean, mm.sigmaA0[0], rareUsefulAtStart, eff, lineBreeding(req), mm.genome.layout))
+		metrics = append(metrics, computeMetrics(gen, pop, metricContext{effects: primaryEffects, baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: primaryBaseMean, sigmaA0: mm.sigmaA0[0], rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: mm.genome.layout}, eff))
 		// Per-trait MetricPoints — we only need a small subset for charts,
 		// reuse computeMetrics with per-trait effects + baseline.
 		for t := 0; t < T; t++ {
-			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, effects[t], baseFreq, baseDiversity, baseMeansPerTrait[t], mm.sigmaA0[t], rareUsefulAtStart, eff, lineBreeding(req), mm.genome.layout))
+			perTraitMetrics[t] = append(perTraitMetrics[t], computeMetrics(gen, pop, metricContext{effects: effects[t], baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: baseMeansPerTrait[t], sigmaA0: mm.sigmaA0[t], rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: mm.genome.layout}, eff))
 		}
 	}
 	populateNeOnAggregate := func() {
@@ -437,11 +437,14 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 	if err := validateMultiTraitRequest(req); err != nil {
 		return SimResponse{}, err
 	}
+	if req.Ploidy == 4 {
+		return SimResponse{}, errors.New("multi-trait runs are diploid only for now; tetraploid data runs single-trait")
+	}
 	// OCS (Issue 36) needs per-candidate coancestry and single-trait
 	// scores; the multi-trait path does not run it.
 	strategies := make([]strategyConfig, 0)
 	for _, cfg := range buildStrategyConfigs(req) {
-		if cfg.Rule != "ocs_target" && !cfg.SelectInTargetEnv {
+		if cfg.Rule != "ocs_target" && cfg.Rule != "mas_ocs" && !cfg.SelectInTargetEnv {
 			strategies = append(strategies, cfg)
 		}
 	}
@@ -456,6 +459,9 @@ func runMultiTraitSimulation(req SimRequest, progress progressFunc, snapshot sna
 		ds, err := loadDataset(req.Dataset)
 		if err != nil {
 			return SimResponse{}, fmt.Errorf("load dataset %q: %w", req.Dataset, err)
+		}
+		if ds.ploidy > 2 {
+			return SimResponse{}, errors.New("multi-trait runs are diploid only for now; tetraploid data runs single-trait")
 		}
 		ds = subsampleDataset(ds, req.PopulationSize, req.Markers, rng)
 		req.PopulationSize = len(ds.individuals)

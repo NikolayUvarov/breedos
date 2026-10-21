@@ -125,6 +125,15 @@ type SimRequest struct {
 	// SSDGenerations of single-seed descent or by one doubled-haploid step.
 	MatingSystem   string `json:"mating_system,omitempty"`
 	SSDGenerations int    `json:"ssd_generations,omitempty"`
+	// v0.8.11. Gene pyramiding (pyramid.go): TargetLoci names gene columns
+	// of the genotype table; PyramidGenes adds that many synthetic target
+	// genes, each in its own donor founders (synthetic populations only).
+	TargetLoci   []string `json:"target_loci,omitempty"`
+	PyramidGenes int      `json:"pyramid_genes,omitempty"`
+	// v0.8.11. Ploidy: 2 (default) or 4 (autotetraploid, e.g. potato).
+	// Uploaded data carries its own ploidy; this field sets it for
+	// synthetic populations and must agree with the data otherwise.
+	Ploidy int `json:"ploidy,omitempty"`
 }
 
 // v0.7.21 — Issue 18. Single trait's architecture within a multi-trait run.
@@ -249,31 +258,36 @@ type MetricPoint struct {
 	Year float64 `json:"year,omitempty"`
 	// v0.8.9. Alleles still present on multi-allelic (SSR) loci.
 	AllelesRetained int `json:"alleles_retained,omitempty"`
+	// v0.8.11. Gene pyramiding: share homozygous for every target gene,
+	// share carrying every target gene, and each target's frequency.
+	PyramidComplete float64   `json:"pyramid_complete,omitempty"`
+	PyramidCarriers float64   `json:"pyramid_carriers,omitempty"`
+	TargetFreq      []float64 `json:"target_freq,omitempty"`
 }
 
 type FinalStats struct {
-	TraitMean                    float64 `json:"trait_mean"`
-	GeneticGain                  float64 `json:"genetic_gain"`
-	Diversity                    float64 `json:"diversity"`
-	Inbreeding                   float64 `json:"inbreeding"`
-	AlleleDrift                  float64 `json:"allele_drift"`
-	RareUsefulLost               int     `json:"rare_useful_lost"`
-	FixedLoci                    int     `json:"fixed_loci"`
-	FavorableFixed               int     `json:"favorable_fixed"`
-	UnfavorableFixed             int     `json:"unfavorable_fixed"`
-	EffectiveParents             int     `json:"effective_parents"`
-	Replicates                   int     `json:"replicates"`
-	GainStd                      float64 `json:"gain_std"`
-	DiversityStd                 float64 `json:"diversity_std"`
-	InbreedingStd                float64 `json:"inbreeding_std"`
-	ProbabilityInbreedingBreach  float64 `json:"probability_inbreeding_breach"`
-	ProbabilityDiversityCollapse float64 `json:"probability_diversity_collapse"`
-	ProbabilityRareUsefulLoss    float64 `json:"probability_rare_useful_loss"`
-	RiskAdjustedScore            float64 `json:"risk_adjusted_score"`
-	DecisionRank                 int     `json:"decision_rank"`
-	ParetoOptimal                bool    `json:"pareto_optimal"`
-	RecommendedNext              string  `json:"recommended_next"`
-	Feasible                     bool    `json:"feasible"`
+	TraitMean                    float64  `json:"trait_mean"`
+	GeneticGain                  float64  `json:"genetic_gain"`
+	Diversity                    float64  `json:"diversity"`
+	Inbreeding                   float64  `json:"inbreeding"`
+	AlleleDrift                  float64  `json:"allele_drift"`
+	RareUsefulLost               int      `json:"rare_useful_lost"`
+	FixedLoci                    int      `json:"fixed_loci"`
+	FavorableFixed               int      `json:"favorable_fixed"`
+	UnfavorableFixed             int      `json:"unfavorable_fixed"`
+	EffectiveParents             int      `json:"effective_parents"`
+	Replicates                   int      `json:"replicates"`
+	GainStd                      float64  `json:"gain_std"`
+	DiversityStd                 float64  `json:"diversity_std"`
+	InbreedingStd                float64  `json:"inbreeding_std"`
+	ProbabilityInbreedingBreach  float64  `json:"probability_inbreeding_breach"`
+	ProbabilityDiversityCollapse float64  `json:"probability_diversity_collapse"`
+	ProbabilityRareUsefulLoss    float64  `json:"probability_rare_useful_loss"`
+	RiskAdjustedScore            float64  `json:"risk_adjusted_score"`
+	DecisionRank                 int      `json:"decision_rank"`
+	ParetoOptimal                bool     `json:"pareto_optimal"`
+	RecommendedNext              string   `json:"recommended_next"`
+	Feasible                     bool     `json:"feasible"`
 	FailedConstraints            []string `json:"failed_constraints"`
 	// v0.8.0. Final gain in founder-σA units; mean per-generation rate of
 	// inbreeding over the run, 1 − (1 − F_T)^(1/T); and the Ne it implies.
@@ -289,6 +303,17 @@ type FinalStats struct {
 	// founders and alleles still present at the end.
 	AllelesAtStart  int `json:"alleles_at_start,omitempty"`
 	AllelesRetained int `json:"alleles_retained,omitempty"`
+	// v0.8.11. Gene pyramiding outcome: final shares, the first
+	// generations with ≥ 50 % / ≥ 90 % complete homozygous pyramids (0 =
+	// not reached), and target genes lost.
+	PyramidComplete float64 `json:"pyramid_complete,omitempty"`
+	PyramidCarriers float64 `json:"pyramid_carriers,omitempty"`
+	PyramidGen50    int     `json:"pyramid_gen50,omitempty"`
+	PyramidGen90    int     `json:"pyramid_gen90,omitempty"`
+	TargetsLost     int     `json:"targets_lost,omitempty"`
+	// Share of replicates that lost at least one target gene; the mean
+	// frequency hides a gene lost in one replicate.
+	ProbabilityTargetLoss float64 `json:"probability_target_loss,omitempty"`
 }
 
 type EditCandidate struct {
@@ -325,6 +350,8 @@ type runModel struct {
 	// v0.8.8 — Issue 39. Line derivation after each cross.
 	matingSystem   string
 	ssdGenerations int
+	// v0.8.11. Pyramiding target markers.
+	targets []int
 }
 
 func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []float64) runModel {
@@ -453,13 +480,13 @@ type SimJobStartResponse struct {
 }
 
 type SimJobStatus struct {
-	JobID          string        `json:"job_id"`
-	Percent        int           `json:"percent"`
-	Message        string        `json:"message"`
-	Done           bool          `json:"done"`
-	Error          string        `json:"error,omitempty"`
-	Result         *SimResponse  `json:"result,omitempty"`
-	LatestSnapshot *AFSSnapshot  `json:"latest_snapshot,omitempty"`
+	JobID          string       `json:"job_id"`
+	Percent        int          `json:"percent"`
+	Message        string       `json:"message"`
+	Done           bool         `json:"done"`
+	Error          string       `json:"error,omitempty"`
+	Result         *SimResponse `json:"result,omitempty"`
+	LatestSnapshot *AFSSnapshot `json:"latest_snapshot,omitempty"`
 	// v0.7.13: snapshot queue. The status endpoint accepts ?since=<n> and
 	// returns Snapshots[since:] plus SnapshotSeq = len(internal store). The
 	// client polls fast (cheap), accumulates snapshots, and plays them back
@@ -836,6 +863,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	var initial []organism
 	var datasetMeta *loadedDataset
 	var upload *UploadedDataset
+	var targetKeep []int // v0.8.11: target columns in the full dataset
 	switch {
 	case req.Upload != "":
 		// v0.7.26 — Issue 05. Upload path: founder population comes
@@ -847,10 +875,15 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		if up.Genotype == nil || up.Genotype.dataset == nil {
 			return SimResponse{}, fmt.Errorf("upload %q has no genotype", req.Upload)
 		}
-		ds := subsampleDataset(up.Genotype.dataset, req.PopulationSize, req.Markers, rng)
+		keep, err := resolveTargets(req.TargetLoci, up.Genotype.dataset)
+		if err != nil {
+			return SimResponse{}, err
+		}
+		ds := subsampleDatasetKeeping(up.Genotype.dataset, req.PopulationSize, req.Markers, keep, rng)
 		req.PopulationSize = len(ds.individuals)
 		req.Markers = ds.markerCount
 		datasetMeta = ds
+		targetKeep = keep
 		upload = up
 		initial = clonePopulation(ds.individuals)
 		reportProgress(progress, 3, fmt.Sprintf("loaded upload %s: N=%d, markers=%d (ephemeral, in-memory)",
@@ -860,7 +893,12 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		if err != nil {
 			return SimResponse{}, fmt.Errorf("load dataset %q: %w", req.Dataset, err)
 		}
-		ds = subsampleDataset(ds, req.PopulationSize, req.Markers, rng)
+		keep, err := resolveTargets(req.TargetLoci, ds)
+		if err != nil {
+			return SimResponse{}, err
+		}
+		targetKeep = keep
+		ds = subsampleDatasetKeeping(ds, req.PopulationSize, req.Markers, keep, rng)
 		req.PopulationSize = len(ds.individuals)
 		req.Markers = ds.markerCount
 		datasetMeta = ds
@@ -868,7 +906,23 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		reportProgress(progress, 3, fmt.Sprintf("loaded dataset %s: N=%d, markers=%d%s",
 			req.Dataset, req.PopulationSize, req.Markers, placeholderTag(ds)))
 	default:
-		initial = makeInitialPopulation(req.PopulationSize, req.Markers, rng)
+		if len(req.TargetLoci) > 0 {
+			return SimResponse{}, errors.New("target_loci names gene columns of a genotype table: upload one, or use pyramid_genes for a synthetic population")
+		}
+		initial = makeInitialPopulationPloidy(req.PopulationSize, req.Markers, runPloidy(req, nil), rng)
+	}
+	// v0.8.11. Ploidy comes from the data; a request that contradicts it
+	// is an error rather than a silent reinterpretation.
+	ploidy := runPloidy(req, datasetMeta)
+	if datasetMeta != nil && req.Ploidy != 0 && req.Ploidy != ploidy {
+		return SimResponse{}, fmt.Errorf("the founder data is %s but ploidy %d was requested", ploidyName(ploidy), req.Ploidy)
+	}
+	if ploidy > 2 && lineBreeding(req) {
+		return SimResponse{}, errors.New("SSD / doubled-haploid line breeding is modelled for diploids only; use mating_system random for tetraploid data")
+	}
+	req.Ploidy = ploidy
+	if datasetMeta != nil && (req.PyramidGenes > 0) {
+		return SimResponse{}, errors.New("pyramid_genes adds synthetic genes to a synthetic population; with uploaded or built-in data name the gene columns in target_loci")
 	}
 
 	// v0.8.9. A small dataset (e.g. a dozen SSR loci) can hold fewer
@@ -887,8 +941,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	effectsSource := "synthetic_qtl"
 	var effectEstimate *EffectEstimateSummary
 	if upload != nil {
-		cols, _ := subsampleColumns(upload.Genotype.dataset, req.Markers)
-		est, sum, err := effectsFromUpload(upload, cols, req.Heritability, rand.New(rand.NewSource(req.Seed+effectsSeedOffset)))
+		est, sum, err := effectsFromUpload(upload, datasetMeta.origCols, req.Heritability, rand.New(rand.NewSource(req.Seed+effectsSeedOffset)))
 		if err != nil {
 			return SimResponse{}, fmt.Errorf("estimate marker effects from the uploaded phenotype: %w", err)
 		}
@@ -897,9 +950,33 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 			reportProgress(progress, 4, fmt.Sprintf("marker effects estimated from %d phenotyped lines (CV predictive ability %.2f)", sum.Phenotyped, sum.CVPredictiveAbility))
 		}
 	}
+	// v0.8.11. Pyramiding targets: named gene columns of the data, or
+	// synthetic genes in their own donor founders. Resistance genes do not
+	// act on the selected trait, so synthetic QTL effects there are removed.
+	var targets []int
+	var targetNames []string
+	if req.PyramidGenes > 0 {
+		targets = setupSyntheticPyramid(initial, effects, req.PyramidGenes, ploidy, rand.New(rand.NewSource(req.Seed+pyramidSeedOffset)))
+		for k := range targets {
+			targetNames = append(targetNames, fmt.Sprintf("R%d", k+1))
+		}
+	} else if len(targetKeep) > 0 {
+		for _, k := range targetKeep {
+			for j, c := range datasetMeta.origCols {
+				if c == k {
+					targets = append(targets, j)
+					targetNames = append(targetNames, datasetMeta.markerNames[j])
+					if effectEstimate == nil {
+						effects[j] = 0
+					}
+				}
+			}
+		}
+	}
 	// v0.8.0. Founder phase is drawn from its own stream so the QTL
 	// effects above stay identical to v0.7.x for the same seed.
 	gm := buildGenomeMap(req, datasetMeta)
+	gm.ploidyN = ploidy
 	initFounders(initial, gm, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset)))
 	// v0.8.8 — Issue 39. Line breeding starts from inbred lines.
 	inbredFounders := 0
@@ -907,6 +984,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		inbredFounders = homozygousFounders(initial, gm, 0.05, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset+1)))
 	}
 	model := newRunModel(req, gm, initial, effects)
+	model.targets = targets
 	// v0.8.7 — Issue 38. Under a climate scenario, selection uses the
 	// normal-season effects while every metric is on the target mix of
 	// seasons (gxe.go).
@@ -991,6 +1069,16 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		}
 		notes = append(notes, fmt.Sprintf("Multi-allelic markers (%s): %s SSR loci used, %d alleles (%d–%d per locus in the file). Each allele is an indicator marker inherited as a unit with its locus. Diversity is Nei's expected heterozygosity per locus; alleles_retained counts alleles still present.%s %s", info.Format, used, gm.markers, info.MinAlleles, info.MaxAlleles, imputed, source))
 	}
+	if ploidy > 2 {
+		notes = append(notes, fmt.Sprintf("Autotetraploid: four homologues per chromosome, dosage 0–4. In meiosis the homologues pair at random into two bivalents and each gamete takes one recombinant chromatid from each (random chromosome segregation; double reduction is not modelled). Heterozygosity decays more slowly than in diploids — 4N gene copies per generation instead of 2N."))
+	}
+	if len(targets) > 0 {
+		src := "named gene columns of the genotype table"
+		if req.PyramidGenes > 0 {
+			src = fmt.Sprintf("synthetic genes, each carried homozygously by its own %.0f%% of founders", 100*pyramidDonorShare)
+		}
+		notes = append(notes, fmt.Sprintf("Gene pyramiding: %d target genes (%s) — %s. Target genes do not act on the selected trait; MAS ranks candidates by target alleles first, then by phenotype. pyramid_complete is the share of individuals homozygous for every target.", len(targets), strings.Join(targetNames, ", "), src))
+	}
 	if lineBreeding(req) {
 		how := "one doubled-haploid step (fully homozygous lines)"
 		if req.MatingSystem == matingSSD {
@@ -1014,6 +1102,12 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	}
 	if lociInfo != nil {
 		decision.Interpretation = append(decision.Interpretation, alleleRetentionLine(results))
+	}
+	if len(targets) > 0 {
+		if line := pyramidSummaryLine(results, targetNames, req.CycleYears); line != "" {
+			decision.Interpretation = append(decision.Interpretation, line)
+		}
+		decision.Interpretation = append(decision.Interpretation, pyramidPlanningLine(len(targets), req))
 	}
 	return SimResponse{Request: req, Decision: decision, Strategies: results, CandidateEdits: candidates, Notes: notes, DegenerateRun: degenerateParentPool(req), EffectsSource: effectsSource, EffectEstimate: effectEstimate, Loci: lociInfo}, nil
 }
@@ -1066,6 +1160,28 @@ func editScaleEffects(effects []float64, estimated bool) []float64 {
 		out[i] = e / sd
 	}
 	return out
+}
+
+// pyramidSeedOffset separates the synthetic donor draw from the run stream.
+const pyramidSeedOffset = 0x00b1_0811
+
+// runPloidy is the ploidy of the run: the data's, else the request's
+// (default 2).
+func runPloidy(req SimRequest, ds *loadedDataset) int {
+	if ds != nil && ds.ploidy > 2 {
+		return ds.ploidy
+	}
+	if ds == nil && req.Ploidy == 4 {
+		return 4
+	}
+	return 2
+}
+
+func ploidyName(p int) string {
+	if p == 4 {
+		return "tetraploid"
+	}
+	return "diploid"
 }
 
 // gxeSeedOffset separates the G×E architecture draw from the run stream.
@@ -1133,7 +1249,7 @@ func buildNotes(req SimRequest, strategyCount int, baseDiversity float64, datase
 		notes = append(notes, fmt.Sprintf("Genomic selection mock: prediction accuracy %.2f at generation 0 (%s), decaying as genetic variance erodes. Its real-world edge — a shorter breeding cycle — needs a time axis this version does not model yet.", acc, accSrc))
 	}
 	if req.StrategySet == "advanced" && len(req.Traits) == 0 {
-		notes = append(notes, fmt.Sprintf("Optimum contribution selection: target ΔF %.2f%% per generation (Ne ≈ %.0f). Contributions maximise c'g subject to c'Fc = θ + ΔF(1 − θ), with F the IBD coancestry among the top %d candidates by phenotype (Meuwissen 1997); realised ΔF is in the results.", 100*req.TargetDeltaF, 1/(2*req.TargetDeltaF), ocsMaxCandidates))
+		notes = append(notes, fmt.Sprintf("Optimum contribution selection: target ΔF %.2f%% per generation (Ne ≈ %.0f). Contributions maximise c'g subject to c'Fc = θ + ΔF(1 − θ), with F the IBD coancestry among the top %d candidates by phenotype (Meuwissen 1997); realised ΔF is in the results.", 100*req.TargetDeltaF, neFromDeltaF(req.TargetDeltaF, req.Ploidy), ocsMaxCandidates))
 	}
 	if req.Upload != "" {
 		notes = append(notes, fmt.Sprintf("Founder population came from upload %s (ephemeral, in-memory; not persisted). EARLY IMPORT path — not production integration. Pedigree and candidate-edit tables, if uploaded, are surfaced in the upload summary but NOT consumed; phenotypes drive the trait architecture when at least %d genotyped lines have one.", req.Upload, minPhenotypedForEffects))
@@ -1191,6 +1307,11 @@ func buildStrategyConfigs(req SimRequest) []strategyConfig {
 		{Name: "Aggressive selection", Code: "aggressive", Summary: "Maximizes short-term trait gain. Useful as a warning baseline: fast progress can consume diversity and future optionality.", Rule: "phenotype", MatingRule: "random", TraitWeight: 1.0, ParentMultiplier: 0.75},
 		{Name: "Diversity-preserving selection", Code: "diversity", Summary: "Keeps more genetically unusual candidates in the parent pool. Slower gain, lower bottleneck risk.", Rule: "score", MatingRule: "random", TraitWeight: 0.55, NoveltyWeight: 1.25, ParentMultiplier: 2.25},
 		{Name: "Balanced strategy", Code: "balanced", Summary: "Trades off near-term gain and long-term genetic optionality. This is the default BreedOS posture.", Rule: "score", MatingRule: "random", TraitWeight: 0.85, NoveltyWeight: 0.50, ParentMultiplier: 1.60},
+	}
+	// v0.8.11. Gene pyramiding with marker-assisted selection.
+	if pyramidRequested(req) {
+		strategies = append(strategies, strategyConfig{Name: "MAS gene pyramiding", Code: "mas_pyramid", Summary: "Marker-assisted selection: ranks candidates first by how many favourable target-gene alleles they carry, then by phenotype, to combine all target genes in one line.", Rule: "mas_pyramid", MatingRule: "random", TraitWeight: 1.0, ParentMultiplier: 1.0})
+		strategies = append(strategies, strategyConfig{Name: "MAS + OCS (ΔF target)", Code: "mas_ocs", Summary: "The same target-gene ranking, with parent contributions chosen by optimum contribution selection so coancestry rises by target_delta_f per generation: the pyramid assembles more slowly, inbreeding stays controlled.", Rule: "mas_ocs", MatingRule: "allocated", TraitWeight: 1.0, ParentMultiplier: 1.0})
 	}
 	if req.CrisprEnabled && req.CrisprEdits > 0 {
 		strategies = append(strategies, strategyConfig{Name: "Balanced + CRISPR seed", Code: "balanced_crispr", Summary: "Demonstrates edit-aware integration: prioritize beneficial loci, seed them into part of the founding population, then run balanced selection.", Rule: "score", MatingRule: "random", TraitWeight: 0.85, NoveltyWeight: 0.50, ParentMultiplier: 1.60, UseCrisprSeed: true})
@@ -1461,10 +1582,21 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	metricCount := len(reps[0].Metrics)
 	metrics := make([]MetricPoint, metricCount)
 	for genIdx := 0; genIdx < metricCount; genIdx++ {
-		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles float64
+		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles, pyrComplete, pyrCarriers float64
+		var targetFreq []float64
 		for _, rep := range reps {
 			p := rep.Metrics[genIdx]
 			alleles += float64(p.AllelesRetained)
+			pyrComplete += p.PyramidComplete
+			pyrCarriers += p.PyramidCarriers
+			if p.TargetFreq != nil {
+				if targetFreq == nil {
+					targetFreq = make([]float64, len(p.TargetFreq))
+				}
+				for k, f := range p.TargetFreq {
+					targetFreq[k] += f
+				}
+			}
 			trait += p.TraitMean
 			gain += p.GeneticGain
 			gainSigma += p.GainSigma
@@ -1478,10 +1610,13 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 			parents += float64(p.EffectiveParents)
 		}
 		den := float64(len(reps))
-		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
+		for k := range targetFreq {
+			targetFreq[k] = round4(targetFreq[k] / den)
+		}
+		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), PyramidComplete: round4(pyrComplete / den), PyramidCarriers: round4(pyrCarriers / den), TargetFreq: targetFreq, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
 	}
 	// v0.7.20 — Issue 20. Fill in Ne[t] = 1 / (2 ΔF) over the metrics slice.
-	populateNeTrajectory(metrics)
+	populateNeTrajectoryPloidy(metrics, req.Ploidy)
 	// v0.7.24 — Issue 28. Climate penalty applied uniformly across the
 	// population. Scales TraitMean / GeneticGain on every MetricPoint by
 	// (1 − penalty). No-op when req.Climate == nil (single-trait runs
@@ -1518,7 +1653,21 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	final := FinalStats{TraitMean: finalMetric.TraitMean, GeneticGain: finalMetric.GeneticGain, Diversity: finalMetric.Diversity, Inbreeding: finalMetric.Inbreeding, AlleleDrift: finalMetric.AlleleDrift, RareUsefulLost: finalMetric.RareUsefulLost, FixedLoci: finalMetric.FixedLoci, FavorableFixed: finalMetric.FavorableFixed, UnfavorableFixed: finalMetric.UnfavorableFixed, EffectiveParents: finalMetric.EffectiveParents, Replicates: len(reps), GainStd: round4(stddev(gains)), DiversityStd: round4(stddev(divs)), InbreedingStd: round4(stddev(inbr)), ProbabilityInbreedingBreach: round4(float64(inbreedingBreaches) / float64(len(reps))), ProbabilityDiversityCollapse: round4(float64(diversityCollapses) / float64(len(reps))), ProbabilityRareUsefulLoss: round4(float64(rareLossEvents) / float64(len(reps)))}
 	final.GeneticGainSigma = finalMetric.GainSigma
 	final.AllelesAtStart, final.AllelesRetained = metrics[0].AllelesRetained, finalMetric.AllelesRetained
-	final.MeanDeltaF, final.Ne = meanInbreedingRate(finalMetric.Inbreeding, finalMetric.Generation)
+	if finalMetric.TargetFreq != nil {
+		final.PyramidComplete, final.PyramidCarriers = finalMetric.PyramidComplete, finalMetric.PyramidCarriers
+		final.PyramidGen50, final.PyramidGen90 = pyramidMilestones(metrics)
+		var lostSum, lossEvents int
+		for _, rep := range reps {
+			lost := targetsLost(rep.Metrics[len(rep.Metrics)-1].TargetFreq)
+			lostSum += lost
+			if lost > 0 {
+				lossEvents++
+			}
+		}
+		final.TargetsLost = int(math.Round(float64(lostSum) / float64(len(reps))))
+		final.ProbabilityTargetLoss = round4(float64(lossEvents) / float64(len(reps)))
+	}
+	final.MeanDeltaF, final.Ne = meanInbreedingRate(finalMetric.Inbreeding, finalMetric.Generation, req.Ploidy)
 	if finalMetric.Year > 0 {
 		final.Years = finalMetric.Year
 		final.GainSigmaPerYear = round4(finalMetric.GainSigma / finalMetric.Year)
@@ -1530,16 +1679,17 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 
 // meanInbreedingRate returns the per-generation rate of inbreeding that
 // takes founders (F = 0) to finalF in generations steps,
-// ΔF = 1 − (1 − F_T)^(1/T), and the effective size 1 / (2ΔF) it implies.
-func meanInbreedingRate(finalF float64, generations int) (deltaF, ne float64) {
+// ΔF = 1 − (1 − F_T)^(1/T), and the effective size 1 / (ploidy·ΔF) it
+// implies.
+func meanInbreedingRate(finalF float64, generations, ploidy int) (deltaF, ne float64) {
 	if generations <= 0 || finalF <= 0 {
 		return 0, maxEffectiveNe
 	}
 	if finalF >= 1 {
-		return 1, round4(effectiveNeFromDeltaF(1))
+		return 1, round4(neFromDeltaF(1, ploidy))
 	}
 	deltaF = 1 - math.Pow(1-finalF, 1/float64(generations))
-	return round4(deltaF), round4(effectiveNeFromDeltaF(deltaF))
+	return round4(deltaF), round4(neFromDeltaF(deltaF, ploidy))
 }
 
 func annotateDecisionScores(results []StrategyResult) {
@@ -1599,8 +1749,10 @@ func annotateDecisionScores(results []StrategyResult) {
 func isBaselineStrategy(code string) bool { return code == "neutral" || code == "random" }
 
 func dominates(a, b FinalStats) bool {
-	betterOrEqual := a.GeneticGain >= b.GeneticGain && a.Diversity >= b.Diversity && a.Inbreeding <= b.Inbreeding && a.ProbabilityDiversityCollapse <= b.ProbabilityDiversityCollapse && a.ProbabilityRareUsefulLoss <= b.ProbabilityRareUsefulLoss
-	strictlyBetter := a.GeneticGain > b.GeneticGain || a.Diversity > b.Diversity || a.Inbreeding < b.Inbreeding || a.ProbabilityDiversityCollapse < b.ProbabilityDiversityCollapse || a.ProbabilityRareUsefulLoss < b.ProbabilityRareUsefulLoss
+	// v0.8.11: with pyramiding targets the complete-pyramid share is an
+	// objective too (it is 0 for every strategy otherwise).
+	betterOrEqual := a.GeneticGain >= b.GeneticGain && a.Diversity >= b.Diversity && a.Inbreeding <= b.Inbreeding && a.ProbabilityDiversityCollapse <= b.ProbabilityDiversityCollapse && a.ProbabilityRareUsefulLoss <= b.ProbabilityRareUsefulLoss && a.PyramidComplete >= b.PyramidComplete
+	strictlyBetter := a.GeneticGain > b.GeneticGain || a.Diversity > b.Diversity || a.Inbreeding < b.Inbreeding || a.ProbabilityDiversityCollapse < b.ProbabilityDiversityCollapse || a.ProbabilityRareUsefulLoss < b.ProbabilityRareUsefulLoss || a.PyramidComplete > b.PyramidComplete
 	return betterOrEqual && strictlyBetter
 }
 func combinedRisk(f FinalStats) float64 {
@@ -1634,6 +1786,10 @@ func evaluateConstraints(req SimRequest, f FinalStats, baseDiversity float64) (b
 	}
 	if req.MaxCombinedRisk > 0 && combinedRisk(f) > req.MaxCombinedRisk {
 		failed = append(failed, fmt.Sprintf("combined risk %.4f > max %.4f", combinedRisk(f), req.MaxCombinedRisk))
+	}
+	// v0.8.11: naming target genes declares the goal of a complete pyramid.
+	if pyramidRequested(req) && f.PyramidComplete < pyramidGoal {
+		failed = append(failed, fmt.Sprintf("complete pyramid %.2f < min %.2f of plants", f.PyramidComplete, pyramidGoal))
 	}
 	return len(failed) == 0, failed
 }
@@ -1673,6 +1829,9 @@ func constraintsAppliedList(req SimRequest) []string {
 	}
 	if req.MaxCombinedRisk > 0 {
 		out = append(out, fmt.Sprintf("max combined risk ≤ %.4f", req.MaxCombinedRisk))
+	}
+	if pyramidRequested(req) {
+		out = append(out, fmt.Sprintf("complete pyramid ≥ %.0f%% of plants (target genes set)", 100*pyramidGoal))
 	}
 	return out
 }
@@ -1972,6 +2131,8 @@ func classifyFailure(msg string) string {
 		return "min effective parents"
 	case strings.HasPrefix(msg, "combined risk "):
 		return "max combined risk"
+	case strings.HasPrefix(msg, "complete pyramid "):
+		return "complete pyramid"
 	}
 	return msg
 }
@@ -2241,6 +2402,18 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	if req.CycleYears < 0 || req.CycleYears > 30 || req.GenomicCycleYears < 0 || req.GenomicCycleYears > 30 {
 		return errors.New("cycle_years and genomic_cycle_years must be between 0 and 30 years (0 = no time axis / same as cycle_years)")
 	}
+	if req.Ploidy != 0 && req.Ploidy != 2 && req.Ploidy != 4 {
+		return errors.New("ploidy must be 2 (diploid) or 4 (autotetraploid, e.g. potato)")
+	}
+	if req.PyramidGenes < 0 || req.PyramidGenes > maxPyramidGenes {
+		return fmt.Errorf("pyramid_genes must be between 0 and %d", maxPyramidGenes)
+	}
+	if len(req.TargetLoci) > maxPyramidGenes {
+		return fmt.Errorf("at most %d target_loci", maxPyramidGenes)
+	}
+	if (req.PyramidGenes > 0 || len(req.TargetLoci) > 0) && len(req.Traits) > 0 {
+		return errors.New("gene pyramiding is available for single-trait runs")
+	}
 	switch req.MatingSystem {
 	case "", matingOutcross, matingSSD, matingDoubledHaploid:
 	default:
@@ -2359,7 +2532,22 @@ func effectiveNeFromDeltaF(deltaF float64) float64 {
 // populateNeTrajectory fills in MetricPoint.Ne from the per-generation
 // inbreeding values. Generation 0 has no preceding generation, so its Ne
 // is set to maxEffectiveNe (chart entry point).
-func populateNeTrajectory(metrics []MetricPoint) {
+func populateNeTrajectory(metrics []MetricPoint) { populateNeTrajectoryPloidy(metrics, 2) }
+
+// neFromDeltaF is Ne = 1 / (ploidy · ΔF): 2N gene copies per generation in
+// a diploid, 4N in an autotetraploid (v0.8.11).
+func neFromDeltaF(deltaF float64, ploidy int) float64 {
+	if ploidy <= 2 {
+		return effectiveNeFromDeltaF(deltaF)
+	}
+	ne := effectiveNeFromDeltaF(deltaF) * 2 / float64(ploidy)
+	if ne > maxEffectiveNe {
+		return maxEffectiveNe
+	}
+	return ne
+}
+
+func populateNeTrajectoryPloidy(metrics []MetricPoint, ploidy int) {
 	if len(metrics) == 0 {
 		return
 	}
@@ -2373,7 +2561,7 @@ func populateNeTrajectory(metrics []MetricPoint) {
 			dF /= prev
 		}
 		metrics[i].DeltaF = round4(dF)
-		metrics[i].Ne = round4(effectiveNeFromDeltaF(dF))
+		metrics[i].Ne = round4(neFromDeltaF(dF, ploidy))
 	}
 }
 
@@ -2399,6 +2587,12 @@ func makeEffects(markers, qtl int, rng *rand.Rand) []float64 {
 	return effects
 }
 func makeInitialPopulation(n, markers int, rng *rand.Rand) []organism {
+	return makeInitialPopulationPloidy(n, markers, 2, rng)
+}
+
+// makeInitialPopulationPloidy draws founders in Hardy–Weinberg proportions
+// for the given ploidy (dosage 0..ploidy per marker).
+func makeInitialPopulationPloidy(n, markers, ploidy int, rng *rand.Rand) []organism {
 	freq := make([]float64, markers)
 	for m := 0; m < markers; m++ {
 		freq[m] = 0.03 + rng.Float64()*0.94
@@ -2408,11 +2602,10 @@ func makeInitialPopulation(n, markers int, rng *rand.Rand) []organism {
 		g := make([]uint8, markers)
 		for m := 0; m < markers; m++ {
 			var x uint8
-			if rng.Float64() < freq[m] {
-				x++
-			}
-			if rng.Float64() < freq[m] {
-				x++
+			for c := 0; c < ploidy; c++ {
+				if rng.Float64() < freq[m] {
+					x++
+				}
 			}
 			g[m] = x
 		}
@@ -2428,19 +2621,26 @@ func clonePopulation(pop []organism) []organism {
 			phase: append([]uint64(nil), pop[i].phase...),
 			ibd:   append([]uint16(nil), pop[i].ibd...),
 		}
+		if pop[i].strands != nil {
+			out[i].strands = make([][]uint64, len(pop[i].strands))
+			for s := range pop[i].strands {
+				out[i].strands[s] = append([]uint64(nil), pop[i].strands[s]...)
+			}
+		}
 	}
 	return out
 }
 
 func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects, selEffects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
-	metrics = append(metrics, computeMetrics(0, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, 0, lineBreeding(req), model.genome.layout))
+	mc := metricContext{effects: effects, baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: baseMean, sigmaA0: model.sigmaA0, rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: model.genome.layout, targets: model.targets}
+	metrics = append(metrics, computeMetrics(0, pop, mc, 0))
 	cycle := cycleYearsFor(req, cfg)
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents := selectParents(pop, selEffects, req, cfg, model, rng, gen)
 		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
 		deriveLines(pop, model.matingSystem, model.ssdGenerations, model.genome, req.MutationRate, rng)
-		m := computeMetrics(gen, pop, effects, baseFreq, baseDiversity, baseMean, model.sigmaA0, rareUsefulAtStart, distinctParents(parents), lineBreeding(req), model.genome.layout)
+		m := computeMetrics(gen, pop, mc, distinctParents(parents))
 		m.Year = round4(float64(gen) * cycle)
 		metrics = append(metrics, m)
 		if progress != nil {
@@ -2484,6 +2684,7 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 		return append([]int(nil), perm[:parentCount]...)
 	}
 	freq := alleleFreq(pop, req.Markers)
+	ploidy := ploidyOf(pop)
 	gvals := geneticValues(pop, effects)
 	meanG, varG := meanVar(gvals)
 	stdG := math.Sqrt(math.Max(varG, 1e-9))
@@ -2505,7 +2706,7 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 		var novelty float64
 		for m, gv := range pop[i].geno {
 			p := freq[m]
-			x := float64(gv) / 2.0
+			x := float64(gv) / float64(ploidy)
 			d := x - p
 			novelty += d * d
 		}
@@ -2513,6 +2714,10 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 	}
 	meanN, varN := meanVar(novelties)
 	stdN := math.Sqrt(math.Max(varN, 1e-9))
+	var targetW []float64
+	if cfg.Rule == "mas_pyramid" || cfg.Rule == "mas_ocs" {
+		targetW = targetWeights(freq, model.targets, n, ploidy)
+	}
 	scored := make([]scoredIndividual, n)
 	for i := range pop {
 		phenotype := phenotypes[i]
@@ -2542,6 +2747,8 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 		switch cfg.Rule {
 		case "phenotype":
 			score = zTrait
+		case "mas_pyramid", "mas_ocs":
+			score = pyramidTargetWeight*targetScore(&pop[i], model.targets, targetW, ploidy) + zTrait
 		case "genomic":
 			score = (genomicPred - meanG) / stdG
 		case "imported_gebv":
@@ -2572,7 +2779,7 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 	}
 	// v0.8.5 — Issue 36. Returns a gamete list (2 per offspring), consumed
 	// by the "allocated" mating rule.
-	if cfg.Rule == "ocs_target" {
+	if cfg.Rule == "ocs_target" || cfg.Rule == "mas_ocs" {
 		target := req.TargetDeltaF
 		if target <= 0 {
 			target = defaultTargetDeltaF
@@ -2631,22 +2838,28 @@ func avgSimilarityToSelected(pop []organism, candidate int, selected []int) floa
 		return 0
 	}
 	var sum float64
+	ploidy := float64(ploidyOf(pop))
 	for _, idx := range selected {
-		sum += genotypeSimilarity(pop[candidate].geno, pop[idx].geno)
+		sum += genotypeSimilarityP(pop[candidate].geno, pop[idx].geno, ploidy)
 	}
 	return sum / float64(len(selected))
 }
-func genotypeSimilarity(a, b []uint8) float64 {
+func genotypeSimilarity(a, b []uint8) float64 { return genotypeSimilarityP(a, b, 2) }
+
+// genotypeSimilarityP is identity-by-state similarity of dosage vectors
+// for the given ploidy (v0.8.11).
+func genotypeSimilarityP(a, b []uint8, ploidy float64) float64 {
 	if len(a) == 0 {
 		return 0
 	}
 	var sim float64
 	for i := range a {
-		sim += 1.0 - math.Abs(float64(a[i])-float64(b[i]))/2.0
+		sim += 1.0 - math.Abs(float64(a[i])-float64(b[i]))/ploidy
 	}
 	return sim / float64(len(a))
 }
 func genotypeDistance(a, b []uint8) float64 { return 1.0 - genotypeSimilarity(a, b) }
+
 // makeNextGeneration produces len(pop) offspring. v0.8.0: each parent
 // contributes one recombinant gamete drawn along the genetic map
 // (genomeMap.transmit), carrying phase and IBD labels with the alleles.
@@ -2666,8 +2879,13 @@ func makeNextGeneration(pop []organism, parents []int, gm *genomeMap, mutationRa
 			p2 = chooseSecondParent(pop, parents, p1, rng, matingRule)
 		}
 		child := gm.newOrganism()
-		gm.transmit(&pop[p1], &child, 0, mutationRate, rng, xo)
-		gm.transmit(&pop[p2], &child, 1, mutationRate, rng, xo)
+		if gm.ploidy() > 2 {
+			gm.transmitPolyploid(&pop[p1], &child, 0, mutationRate, rng, xo)
+			gm.transmitPolyploid(&pop[p2], &child, gm.ploidy()/2, mutationRate, rng, xo)
+		} else {
+			gm.transmit(&pop[p1], &child, 0, mutationRate, rng, xo)
+			gm.transmit(&pop[p2], &child, 1, mutationRate, rng, xo)
+		}
 		next[i] = child
 	}
 	return next
@@ -2693,7 +2911,7 @@ func chooseSecondParent(pop []organism, parents []int, p1 int, rng *rand.Rand, m
 		for p2 == p1 {
 			p2 = parents[rng.Intn(len(parents))]
 		}
-		d := genotypeDistance(pop[p1].geno, pop[p2].geno)
+		d := 1.0 - genotypeSimilarityP(pop[p1].geno, pop[p2].geno, float64(ploidyOf(pop)))
 		if d > bestDist {
 			bestDist = d
 			best = p2
@@ -2708,7 +2926,20 @@ func chooseSecondParent(pop []organism, parents []int, p1 int, rng *rand.Rand, m
 // computeMetrics summarises one generation. v0.8.0: Inbreeding is IBD
 // coancestry relative to the founders (ibdCoancestry), no longer
 // 1 − He/He₀ — that quantity is the diversity loss, reported separately.
-func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float64, baseDiversity, baseMean, sigmaA0 float64, rareUsefulAtStart []int, effectiveParents int, betweenLines bool, layout *locusLayout) MetricPoint {
+// metricContext is everything computeMetrics needs besides the population.
+type metricContext struct {
+	effects           []float64
+	baseFreq          []float64
+	baseDiversity     float64
+	baseMean, sigmaA0 float64
+	rareUsefulAtStart []int
+	betweenLines      bool         // v0.8.8: coancestry among lines (line breeding)
+	layout            *locusLayout // v0.8.9: multi-allelic loci
+	targets           []int        // v0.8.11: pyramiding target markers
+}
+
+func computeMetrics(gen int, pop []organism, c metricContext, effectiveParents int) MetricPoint {
+	effects, baseFreq, baseMean, sigmaA0, rareUsefulAtStart, betweenLines, layout := c.effects, c.baseFreq, c.baseMean, c.sigmaA0, c.rareUsefulAtStart, c.betweenLines, c.layout
 	freq := alleleFreq(pop, len(effects))
 	div := diversityOf(freq, layout)
 	trait := meanGeneticValue(pop, effects)
@@ -2720,7 +2951,8 @@ func computeMetrics(gen int, pop []organism, effects []float64, baseFreq []float
 		gainSigma = (trait - baseMean) / sigmaA0
 	}
 	lost := countRareUsefulLost(freq, rareUsefulAtStart)
-	return MetricPoint{Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
+	complete, carriers, targetFreq := pyramidStatus(pop, c.targets)
+	return MetricPoint{PyramidComplete: complete, PyramidCarriers: carriers, TargetFreq: targetFreq, Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
 }
 func fixationStats(freq []float64, effects []float64) (fixed, favorableFixed, unfavorableFixed int) {
 	for i, p := range freq {
@@ -2768,7 +3000,7 @@ func meanGeneticValue(pop []organism, effects []float64) float64 {
 }
 func alleleFreq(pop []organism, markers int) []float64 {
 	freq := make([]float64, markers)
-	denom := float64(len(pop) * 2)
+	denom := float64(len(pop) * ploidyOf(pop))
 	for i := range pop {
 		for m, g := range pop[i].geno {
 			freq[m] += float64(g)
@@ -2866,6 +3098,7 @@ func countRareUsefulLost(freq []float64, loci []int) int {
 	}
 	return lost
 }
+
 // v0.7.27 — Issue 07. baseDiversity is consumed by the classifier so
 // the "wait — bottleneck risk" rule has access to it. Callers all have
 // baseDiversity in scope.
@@ -2922,6 +3155,19 @@ func rankEditCandidates(freq []float64, effects []float64, maxEdits int, baseDiv
 	}
 	return out
 }
+
+// setHomozygous makes o carry the counted allele on every strand at m.
+func setHomozygous(o *organism, m int) {
+	if o.strands != nil {
+		for s := range o.strands {
+			o.strands[s][m>>6] |= 1 << (uint(m) & 63)
+		}
+		o.geno[m] = uint8(len(o.strands))
+		return
+	}
+	o.geno[m] = 2
+}
+
 func applyCrisprSeed(pop []organism, edits []EditCandidate, introPercent float64, rng *rand.Rand) {
 	if introPercent <= 0 || len(edits) == 0 {
 		return
@@ -2938,7 +3184,7 @@ func applyCrisprSeed(pop []organism, edits []EditCandidate, introPercent float64
 		ind := perm[i]
 		for _, edit := range edits {
 			if edit.Locus >= 0 && edit.Locus < len(pop[ind].geno) {
-				pop[ind].geno[edit.Locus] = 2
+				setHomozygous(&pop[ind], edit.Locus)
 			}
 		}
 	}
@@ -2960,6 +3206,10 @@ func recommendationFor(code string, f FinalStats) string {
 		return "Promising when marker/phenotype data support prediction; replace mock predictor with real GEBV models." + riskText
 	case "target_env":
 		return "Use when the target environments include stress the nursery does not see: selecting in the target mix of seasons captures stress-only alleles that normal-season selection leaves to drift." + riskText
+	case "mas_pyramid":
+		return "Use to assemble the target genes fastest; watch coancestry, since selecting on a few donor families raises it quickly — compare with MAS + OCS." + riskText
+	case "mas_ocs":
+		return "Use to assemble the target genes while holding inbreeding at target_delta_f per generation; slower than plain MAS, without the bottleneck." + riskText
 	case "ocs":
 		return "Use to hold inbreeding at a chosen rate: it maximises expected gain per generation at exactly target_delta_f (1% ≈ Ne 50). Under mass selection on phenotype its gain at equal ΔF is comparable to truncation; the advantage grows with EBVs that carry family information." + riskText
 	case "ocs_like":

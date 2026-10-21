@@ -57,6 +57,7 @@ type UploadedDataset struct {
 type uploadedGenotype struct {
 	Individuals int      `json:"individuals"`
 	Markers     int      `json:"markers"`
+	Ploidy      int      `json:"ploidy"`
 	SampleIDs   []string `json:"sample_ids"`                  // first up to 5 ids for the import summary.
 	// v0.8.9. SSR import summary (format, loci, alleles, imputed calls);
 	// Markers then counts allele indicators.
@@ -176,7 +177,13 @@ func getUpload(id string) (*UploadedDataset, bool) {
 // format intentionally matches the existing dataset CSV format so the
 // engine path is shared.
 func parseUploadGenotype(raw []byte) (*uploadedGenotype, error) {
-	ds, err := parseDatasetCSV(raw, "uploaded:genotype.csv")
+	return parseUploadGenotypePloidy(raw, 0)
+}
+
+// parseUploadGenotypePloidy takes the ploidy chosen in the upload form
+// (0 = detect from the file, v0.8.11).
+func parseUploadGenotypePloidy(raw []byte, ploidy int) (*uploadedGenotype, error) {
+	ds, err := parseDatasetCSVPloidy(raw, "uploaded:genotype.csv", ploidy)
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +196,7 @@ func parseUploadGenotype(raw []byte) (*uploadedGenotype, error) {
 		Markers:     ds.markerCount,
 		SampleIDs:   sample,
 		Loci:        ds.ssr,
+		Ploidy:      max(ds.ploidy, 2),
 		dataset:     ds,
 	}, nil
 }
@@ -473,7 +481,11 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upload: genotype file is required", http.StatusBadRequest)
 		return
 	}
-	g, err := parseUploadGenotype(geno)
+	ploidy := 0
+	if v := strings.TrimSpace(r.FormValue("ploidy")); v == "2" || v == "4" {
+		ploidy, _ = strconv.Atoi(v)
+	}
+	g, err := parseUploadGenotypePloidy(geno, ploidy)
 	if err != nil {
 		http.Error(w, "upload: genotype: "+err.Error(), http.StatusBadRequest)
 		return
@@ -623,7 +635,7 @@ func uploadFixtureHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimPrefix(r.URL.Path, "/upload-fixture/")
 	switch name {
-	case "genotype.csv", "genotype_ssr.csv", "phenotype.csv", "pedigree.csv", "edits.csv", "predictions.csv":
+	case "genotype.csv", "genotype_ssr.csv", "genotype_ssr_pi.csv", "phenotype.csv", "pedigree.csv", "edits.csv", "predictions.csv":
 		// ok — v0.7.29 added predictions.csv to the allowlist.
 	default:
 		http.NotFound(w, r)

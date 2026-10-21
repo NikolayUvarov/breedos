@@ -154,8 +154,10 @@ func seedAncestralLinesGxE(pop []organism, introPercent float64, effectsN []floa
 		count = len(pop)
 	}
 	markers := len(effectsN)
+	ploidy := ploidyOf(pop)
 	for i := len(pop) - count; i < len(pop); i++ {
-		o := organism{geno: make([]uint8, markers), phase: make([]uint64, phaseWords(markers)), ibd: pop[i].ibd}
+		o := newOrganismPloidy(markers, 0, ploidy)
+		o.ibd = pop[i].ibd
 		for m := 0; m < markers; m++ {
 			p1 := freq[m] // P(allele 1)
 			switch {
@@ -173,15 +175,9 @@ func seedAncestralLinesGxE(pop []organism, introPercent float64, effectsN []floa
 					p1 = 1 - AncestralAlleleBias
 				}
 			}
-			a := rng.Float64() < p1
-			b := rng.Float64() < p1
-			if a {
-				o.geno[m]++
-			}
-			if b {
-				o.geno[m]++
-				if !a {
-					o.setPhaseBit(m)
+			for h := 0; h < ploidy; h++ {
+				if rng.Float64() < p1 {
+					o.setAllele(m, h, 1)
 				}
 			}
 		}

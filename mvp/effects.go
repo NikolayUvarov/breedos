@@ -114,6 +114,12 @@ func pearson(a, b []float64) float64 {
 // fits SNP-BLUP and cross-validates it. geno rows are 0/1/2 dosages at the
 // simulation's marker columns.
 func estimateMarkerEffects(geno [][]uint8, y []float64, h2 float64, rng *rand.Rand) ([]float64, EffectEstimateSummary, error) {
+	return estimateMarkerEffectsPloidy(geno, y, h2, 2, rng)
+}
+
+// estimateMarkerEffectsPloidy: dosages are 0..ploidy, so a marker's
+// variance under random union is ploidy·p(1−p) (v0.8.11).
+func estimateMarkerEffectsPloidy(geno [][]uint8, y []float64, h2 float64, ploidy int, rng *rand.Rand) ([]float64, EffectEstimateSummary, error) {
 	n := len(geno)
 	sum := EffectEstimateSummary{Phenotyped: n, HeritabilityAssumed: h2, Folds: effectCVFolds}
 	if n < minPhenotypedForEffects {
@@ -130,8 +136,8 @@ func estimateMarkerEffects(geno [][]uint8, y []float64, h2 float64, rng *rand.Ra
 	var sum2pq float64
 	for k := range means {
 		means[k] /= float64(n)
-		p := means[k] / 2
-		sum2pq += 2 * p * (1 - p)
+		p := means[k] / float64(ploidy)
+		sum2pq += float64(ploidy) * p * (1 - p)
 	}
 	X := make([][]float64, n)
 	for i, row := range geno {
@@ -218,7 +224,11 @@ func effectsFromUpload(up *UploadedDataset, cols []int, h2 float64, rng *rand.Ra
 		}
 		rows, y, subsampled = r2, y2, true
 	}
-	beta, sum, err := estimateMarkerEffects(rows, y, h2, rng)
+	ploidy := ds.ploidy
+	if ploidy < 2 {
+		ploidy = 2
+	}
+	beta, sum, err := estimateMarkerEffectsPloidy(rows, y, h2, ploidy, rng)
 	if err != nil {
 		return nil, nil, err
 	}

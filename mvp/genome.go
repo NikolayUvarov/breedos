@@ -43,10 +43,24 @@ const (
 // heterozygous marker the counted allele sits on strand B (strand A
 // otherwise); ibd holds founder-origin labels at the genome map's tracker
 // loci, strand A in [0, T) and strand B in [T, 2T).
+//
+// v0.8.11 — autotetraploids. Polyploid individuals carry one allele bitset
+// per homologue in strands (nil for diploids, which keep phase); geno is
+// then the dosage 0..4 and ibd holds ploidy·T labels, homologue s at
+// [s·T, (s+1)·T).
 type organism struct {
-	geno  []uint8
-	phase []uint64
-	ibd   []uint16
+	geno    []uint8
+	phase   []uint64
+	ibd     []uint16
+	strands [][]uint64
+}
+
+// ploidyOf is the ploidy of a population (all members share it).
+func ploidyOf(pop []organism) int {
+	if len(pop) > 0 && pop[0].strands != nil {
+		return len(pop[0].strands)
+	}
+	return 2
 }
 
 // markerSite is a marker's physical position when the dataset provides it.
@@ -66,6 +80,8 @@ type genomeMap struct {
 	// v0.8.9 — multi-allelic loci (ssr.go): indicator markers share their
 	// locus' position and are never mutated.
 	layout *locusLayout
+	// v0.8.11 — ploidy (0 or 2 = diploid, 4 = autotetraploid).
+	ploidyN int
 }
 
 func phaseWords(markers int) int { return (markers + 63) / 64 }
@@ -79,8 +95,12 @@ func (o *organism) phaseBit(m int) uint8 {
 
 func (o *organism) setPhaseBit(m int) { o.phase[m>>6] |= 1 << (uint(m) & 63) }
 
-// allele returns the allele (0/1) carried on strand s (0 = A, 1 = B) at marker m.
+// allele returns the allele (0/1) carried on strand s (0 = A, 1 = B; or
+// homologue s of a polyploid) at marker m.
 func (o *organism) allele(m, s int) uint8 {
+	if o.strands != nil {
+		return uint8(o.strands[s][m>>6] >> (uint(m) & 63) & 1)
+	}
 	switch o.geno[m] {
 	case 0:
 		return 0
@@ -262,13 +282,43 @@ func (gm *genomeMap) placeTrackers() {
 	}
 }
 
+// setAllele writes allele a (0/1) on strand s of a freshly allocated
+// individual at marker m. Diploid strands must be written A before B.
+func (o *organism) setAllele(m, s int, a uint8) {
+	if a == 0 {
+		return
+	}
+	o.geno[m]++
+	if o.strands != nil {
+		o.strands[s][m>>6] |= 1 << (uint(m) & 63)
+	} else if s == 1 {
+		o.setPhaseBit(m)
+	}
+}
+
+// newOrganismPloidy allocates an empty individual of the given ploidy.
+func newOrganismPloidy(markers, trackers, ploidy int) organism {
+	if ploidy <= 2 {
+		return organism{geno: make([]uint8, markers), phase: make([]uint64, phaseWords(markers)), ibd: make([]uint16, 2*trackers)}
+	}
+	o := organism{geno: make([]uint8, markers), ibd: make([]uint16, ploidy*trackers), strands: make([][]uint64, ploidy)}
+	for s := range o.strands {
+		o.strands[s] = make([]uint64, phaseWords(markers))
+	}
+	return o
+}
+
 // newOrganism allocates an individual with room for phase and IBD labels.
 func (gm *genomeMap) newOrganism() organism {
-	return organism{
-		geno:  make([]uint8, gm.markers),
-		phase: make([]uint64, phaseWords(gm.markers)),
-		ibd:   make([]uint16, 2*len(gm.trackers)),
+	return newOrganismPloidy(gm.markers, len(gm.trackers), gm.ploidy())
+}
+
+// ploidy of the population this map was built for (2 unless set).
+func (gm *genomeMap) ploidy() int {
+	if gm.ploidyN > 2 {
+		return gm.ploidyN
 	}
+	return 2
 }
 
 // initFounders phases unphased founders at random (input genotypes are
@@ -276,6 +326,32 @@ func (gm *genomeMap) newOrganism() organism {
 // Founders are the IBD reference: their inbreeding is 0 by definition.
 func initFounders(pop []organism, gm *genomeMap, rng *rand.Rand) {
 	T := len(gm.trackers)
+	if ploidy := gm.ploidy(); ploidy > 2 {
+		// Polyploid founders: dosage d at a marker puts the counted
+		// allele on d randomly chosen homologues.
+		for i := range pop {
+			o := &pop[i]
+			if o.strands == nil {
+				o.strands = make([][]uint64, ploidy)
+				for s := range o.strands {
+					o.strands[s] = make([]uint64, phaseWords(gm.markers))
+				}
+				for m, g := range o.geno {
+					for _, s := range rng.Perm(ploidy)[:int(g)] {
+						o.strands[s][m>>6] |= 1 << (uint(m) & 63)
+					}
+				}
+				o.phase = nil
+			}
+			o.ibd = make([]uint16, ploidy*T)
+			for s := 0; s < ploidy; s++ {
+				for t := 0; t < T; t++ {
+					o.ibd[s*T+t] = uint16(ploidy*i + s)
+				}
+			}
+		}
+		return
+	}
 	for i := range pop {
 		o := &pop[i]
 		if o.phase == nil {
@@ -329,6 +405,48 @@ func (gm *genomeMap) transmit(parent, child *organism, s int, mutationRate float
 	}
 }
 
+// transmitPolyploid writes one diploid gamete of an autotetraploid parent
+// into homologues first and first+1 of child. Per chromosome the four
+// homologues pair at random into two bivalents (random chromosome
+// segregation); within each bivalent crossovers fall as in a diploid
+// meiosis and the gamete takes one recombinant chromatid from each. Double
+// reduction (both sister chromatids of one homologue in a gamete) is not
+// modelled.
+func (gm *genomeMap) transmitPolyploid(parent, child *organism, first int, mutationRate float64, rng *rand.Rand, xo []float64) {
+	ploidy := len(parent.strands)
+	T := len(gm.trackers)
+	for c := 0; c+1 < len(gm.chromStart); c++ {
+		perm := rng.Perm(ploidy)
+		for b := 0; b < 2; b++ {
+			pair := [2]int{perm[2*b], perm[2*b+1]}
+			side := rng.Intn(2)
+			k := poisson(gm.lengthM[c], rng)
+			xo = xo[:0]
+			for j := 0; j < k; j++ {
+				xo = append(xo, rng.Float64()*gm.lengthM[c])
+			}
+			sort.Float64s(xo)
+			next := 0
+			target := first + b
+			for m := gm.chromStart[c]; m < gm.chromStart[c+1]; m++ {
+				for next < len(xo) && xo[next] < gm.posM[m] {
+					side ^= 1
+					next++
+				}
+				h := pair[side]
+				a := parent.allele(m, h)
+				if mutationRate > 0 && !gm.layout.isIndicator(m) && rng.Float64() < mutationRate {
+					a = 1 - a
+				}
+				child.setAllele(m, target, a)
+				if slot := gm.trackerOf[m]; slot >= 0 && len(parent.ibd) == ploidy*T {
+					child.ibd[target*T+int(slot)] = parent.ibd[h*T+int(slot)]
+				}
+			}
+		}
+	}
+}
+
 // poisson draws from Poisson(lambda) by Knuth's method; lambda here is a
 // chromosome length in Morgans (≈ 0.1–5), where the method is exact and cheap.
 func poisson(lambda float64, rng *rand.Rand) int {
@@ -361,14 +479,16 @@ func ibdCoancestryPairs(pop []organism, betweenOnly bool) float64 {
 	if len(pop) == 0 || len(pop[0].ibd) == 0 {
 		return 0
 	}
-	T := len(pop[0].ibd) / 2
-	copies := 2 * len(pop)
+	ploidy := ploidyOf(pop)
+	T := len(pop[0].ibd) / ploidy
+	copies := ploidy * len(pop)
 	counts := make([]int32, copies)
 	touched := make([]uint16, 0, copies)
 	var sum float64
 	for t := 0; t < T; t++ {
 		for i := range pop {
-			for _, lab := range [2]uint16{pop[i].ibd[t], pop[i].ibd[T+t]} {
+			for s := 0; s < ploidy; s++ {
+				lab := pop[i].ibd[s*T+t]
 				if int(lab) >= len(counts) {
 					grown := make([]int32, int(lab)+1)
 					copy(grown, counts)
@@ -390,11 +510,15 @@ func ibdCoancestryPairs(pop []organism, betweenOnly bool) float64 {
 		if betweenOnly {
 			var within float64
 			for i := range pop {
-				if pop[i].ibd[t] == pop[i].ibd[T+t] {
-					within += 2
+				for s := 0; s < ploidy; s++ {
+					for u := 0; u < ploidy; u++ {
+						if s != u && pop[i].ibd[s*T+t] == pop[i].ibd[u*T+t] {
+							within++
+						}
+					}
 				}
 			}
-			sum += (pairs - within) / (float64(copies)*float64(copies-1) - float64(copies))
+			sum += (pairs - within) / (float64(copies)*float64(copies-1) - float64(len(pop)*ploidy*(ploidy-1)))
 			continue
 		}
 		sum += pairs / (float64(copies) * float64(copies-1))

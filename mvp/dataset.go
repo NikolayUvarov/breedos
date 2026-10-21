@@ -62,6 +62,12 @@ type loadedDataset struct {
 	// grouped into loci (ssr.go); nil for 0/1/2 dosage data.
 	layout *locusLayout
 	ssr    *ssrInfo
+	// v0.8.11. Marker names (header labels; "locus:allele" for SSR
+	// indicators), ploidy (2 or 4), and — on a subsample — the columns of
+	// the full dataset it was taken from.
+	markerNames []string
+	ploidy      int
+	origCols    []int
 }
 
 var datasetCache = struct {
@@ -155,9 +161,19 @@ func resetDatasetCache() {
 // allele sizes when the dosage parse fails and the content looks
 // multi-allelic (ssr.go).
 func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
-	ds, err := parseDosageCSV(raw, sourceFile)
+	return parseDatasetCSVPloidy(raw, sourceFile, 0)
+}
+
+// parseDatasetCSVPloidy is parseDatasetCSV with a declared ploidy (0 =
+// from the file: a "# ploidy: 4" comment, or 3–4 alleles in an SSR cell).
+// Dosage values above 2 are accepted only for tetraploid data (v0.8.11).
+func parseDatasetCSVPloidy(raw []byte, sourceFile string, ploidy int) (*loadedDataset, error) {
+	if ploidy == 0 {
+		ploidy = declaredPloidy(raw)
+	}
+	ds, err := parseDosageCSVPloidy(raw, sourceFile, ploidy)
 	if err != nil && looksMultiallelic(raw) {
-		ssr, ssrErr := parseMultiallelicCSV(raw, sourceFile)
+		ssr, ssrErr := parseMultiallelicCSVPloidy(raw, sourceFile, ploidy)
 		if ssrErr != nil {
 			return nil, fmt.Errorf("%v; read as an SSR allele table instead: %v", err, ssrErr)
 		}
@@ -166,7 +182,33 @@ func parseDatasetCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 	return ds, err
 }
 
+// declaredPloidy reads a "# ploidy: N" comment line (0 if none).
+func declaredPloidy(raw []byte) int {
+	for _, l := range strings.Split(string(raw), "\n") {
+		t := strings.ToLower(strings.TrimSpace(l))
+		if !strings.HasPrefix(t, "#") {
+			if t != "" {
+				return 0
+			}
+			continue
+		}
+		if i := strings.Index(t, "ploidy:"); i >= 0 {
+			if v, err := strconv.Atoi(strings.TrimSpace(t[i+7:])); err == nil {
+				return v
+			}
+		}
+	}
+	return 0
+}
+
 func parseDosageCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
+	return parseDosageCSVPloidy(raw, sourceFile, 2)
+}
+
+func parseDosageCSVPloidy(raw []byte, sourceFile string, ploidy int) (*loadedDataset, error) {
+	if ploidy != 4 {
+		ploidy = 2
+	}
 	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
 	scanner.Buffer(make([]byte, 0, 1024*1024), 64*1024*1024)
 	out := &loadedDataset{sourceFile: sourceFile}
@@ -212,6 +254,10 @@ func parseDosageCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 				return nil, fmt.Errorf("dataset %s: header has fewer than 2 columns", sourceFile)
 			}
 			out.markerCount = headerCols - 1
+			out.markerNames = make([]string, out.markerCount)
+			for k, f := range fields[1:] {
+				out.markerNames[k] = strings.TrimSpace(f)
+			}
 			if out.sites == nil {
 				out.sites = parseSiteList(fields[1:])
 			}
@@ -226,8 +272,12 @@ func parseDosageCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 			if err != nil {
 				return nil, fmt.Errorf("dataset %s: line %d col %d: %w", sourceFile, lineNum, i+2, err)
 			}
-			if v < 0 || v > 2 {
-				return nil, fmt.Errorf("dataset %s: line %d col %d value %d outside 0..2", sourceFile, lineNum, i+2, v)
+			if v < 0 || v > ploidy {
+				hint := ""
+				if ploidy == 2 && v <= 4 {
+					hint = " (for tetraploid dosages 0..4 choose ploidy 4 or add a '# ploidy: 4' line)"
+				}
+				return nil, fmt.Errorf("dataset %s: line %d col %d value %d outside 0..%d%s", sourceFile, lineNum, i+2, v, ploidy, hint)
 			}
 			geno[i] = uint8(v)
 		}
@@ -243,6 +293,7 @@ func parseDosageCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 	if len(out.sites) != out.markerCount {
 		out.sites = nil
 	}
+	out.ploidy = ploidy
 	return out, nil
 }
 
@@ -253,6 +304,12 @@ func parseDosageCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
 // returned dataset is a deep copy; the input is not mutated and can stay in
 // the package-level cache.
 func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDataset {
+	return subsampleDatasetKeeping(ds, n, m, nil, rng)
+}
+
+// subsampleDatasetKeeping is subsampleDataset that always keeps the given
+// columns of the full dataset (pyramiding targets, v0.8.11).
+func subsampleDatasetKeeping(ds *loadedDataset, n, m int, keep []int, rng *rand.Rand) *loadedDataset {
 	if ds == nil {
 		return nil
 	}
@@ -272,11 +329,15 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 		individuals:   make([]organism, n),
 		accessionIDs:  make([]string, n),
 	}
-	cols, layout := subsampleColumns(ds, m)
-	if layout != nil {
-		out.layout, out.ssr = layout, ds.ssr
-		out.markerCount = len(cols)
-		m = len(cols)
+	cols, layout := subsampleColumnsKeeping(ds, m, keep)
+	out.layout, out.ssr, out.ploidy, out.origCols = layout, ds.ssr, ds.ploidy, cols
+	out.markerCount = len(cols)
+	m = len(cols)
+	if ds.markerNames != nil {
+		out.markerNames = make([]string, m)
+		for k, c := range cols {
+			out.markerNames[k] = ds.markerNames[c]
+		}
 	}
 	if ds.sites != nil {
 		out.sites = make([]markerSite, m)
@@ -291,10 +352,21 @@ func subsampleDataset(ds *loadedDataset, n, m int, rng *rand.Rand) *loadedDatase
 		if from.phase != nil {
 			o.phase = make([]uint64, phaseWords(m))
 		}
+		if from.strands != nil {
+			o.strands = make([][]uint64, len(from.strands))
+			for s := range o.strands {
+				o.strands[s] = make([]uint64, phaseWords(m))
+			}
+		}
 		for k, c := range cols {
 			geno[k] = from.geno[c]
 			if from.phase != nil && from.phaseBit(c) == 1 {
 				o.setPhaseBit(k)
+			}
+			for s := range o.strands {
+				if from.allele(c, s) == 1 {
+					o.strands[s][k>>6] |= 1 << (uint(k) & 63)
+				}
 			}
 		}
 		out.individuals[i] = o
@@ -321,16 +393,26 @@ func strideColumns(total, m int) []int {
 // loci, so the indicators of a locus are never split; the re-indexed
 // layout is returned with them (nil for dosage data).
 func subsampleColumns(ds *loadedDataset, m int) ([]int, *locusLayout) {
+	return subsampleColumnsKeeping(ds, m, nil)
+}
+
+// subsampleColumnsKeeping also keeps the given columns (or, for
+// multi-allelic data, their whole loci).
+func subsampleColumnsKeeping(ds *loadedDataset, m int, keep []int) ([]int, *locusLayout) {
 	if m <= 0 || m > ds.markerCount {
 		m = ds.markerCount
 	}
 	if ds.layout == nil {
-		return strideColumns(ds.markerCount, m), nil
+		return keepColumns(strideColumns(ds.markerCount, m), keep), nil
 	}
 	nLoci := ds.layout.loci()
 	want := int(math.Round(float64(nLoci) * float64(m) / float64(ds.markerCount)))
 	if want < 1 {
 		want = 1
 	}
-	return subsetLayout(ds.layout, strideColumns(nLoci, want))
+	loci := strideColumns(nLoci, want)
+	for _, k := range keep {
+		loci = keepColumns(loci, []int{ds.layout.locusOf[k]})
+	}
+	return subsetLayout(ds.layout, loci)
 }

@@ -70,13 +70,54 @@ type ssrInfo struct {
 	TotalCalls   int      `json:"total_calls"`
 	Monomorphic  []string `json:"dropped_monomorphic,omitempty"`
 	ObservedHet  float64  `json:"observed_heterozygosity"`
+	// v0.8.11. Ploidy (2 or 4), tetraploid calls whose allele dosage was
+	// unknown and had to be drawn, and gene columns (pyramiding targets).
+	Ploidy        int      `json:"ploidy"`
+	DosageImputed int      `json:"dosage_imputed_calls,omitempty"`
+	GeneColumns   []string `json:"gene_columns,omitempty"`
+	// Columns read as sample descriptions (species, site, variety…), not
+	// loci, and warnings about a layout that may have been misread.
+	IgnoredColumns []string `json:"ignored_columns,omitempty"`
+	Warnings       []string `json:"warnings,omitempty"`
 }
 
-var ssrMissing = map[string]bool{"": true, "0": true, "na": true, "n/a": true, "-": true, "?": true, ".": true, "nan": true, "-9": true}
+// Missing calls: empty, 0 / 000 / 000000, NA, -9 (STRUCTURE), 999 (a common
+// spreadsheet code; no SSR fragment is 999 bp).
+var ssrMissing = map[string]bool{"": true, "0": true, "na": true, "n/a": true, "-": true, "?": true, ".": true, "nan": true, "-9": true, "999": true}
+
+func isMissingAllele(a string) bool {
+	return ssrMissing[strings.ToLower(a)] || ssrMissing[normaliseAllele(a)]
+}
 
 // A two-column locus needs an explicit separator before the suffix, so
 // loci named RM1, RM2 are never mistaken for the two columns of "RM".
-var pairSuffix = regexp.MustCompile(`^(.+?)[_.\-]([12abAB])$`)
+// "RM1_1", "RM1.b", "gpsb223_allele 1" and "RM1 a2" all pair.
+var pairSuffix = regexp.MustCompile(`^(.+?)[_.\- ]+(?:allele|all|a)?[ _.\-]?([12abAB])$`)
+
+// metadataColumns are header names of sample descriptions that sit among
+// the locus columns in collection tables.
+var metadataColumns = map[string]bool{"species": true, "вид": true, "site": true, "farm": true, "farm_id": true, "village": true, "region": true, "country": true, "origin": true, "variety": true, "сорт": true, "race": true, "раса": true, "cluster": true, "name": true, "название": true, "accession": true, "catalogue": true, "year": true, "lat": true, "lon": true, "latitude": true, "longitude": true}
+
+// unpackAlleles splits a diploid call packed into one integer with three
+// digits per allele ("304304" → "304/304"; "96096", whose leading zero a
+// spreadsheet dropped, → "96/96"). SSR fragments are shorter than 1000 bp,
+// so any integer from 1000 up is a packed pair.
+func unpackAlleles(cell string) (string, bool) {
+	if len(cell) < 4 || len(cell) > 6 {
+		return cell, false
+	}
+	v, err := strconv.Atoi(cell)
+	if err != nil || v < 0 {
+		return cell, false
+	}
+	if v == 0 {
+		return "0", true
+	}
+	if v < 1000 {
+		return cell, false
+	}
+	return strconv.Itoa(v/1000) + "/" + strconv.Itoa(v%1000), true
+}
 
 func splitRow(line string, delim string) []string {
 	parts := strings.Split(line, delim)
@@ -96,9 +137,9 @@ func detectDelimiter(header string) string {
 	return best
 }
 
-// looksMultiallelic is a cheap check that a table that failed the 0/1/2
+// looksMultiallelic is a cheap check that a table that failed the dosage
 // parser is SSR-like rather than broken dosage data: an allele separator,
-// an integer above 2 (allele sizes), or a GenAlEx counts line.
+// an integer above 4 (allele sizes), or a GenAlEx counts line.
 func looksMultiallelic(raw []byte) bool {
 	lines := splitCSVLines(raw)
 	var data []string
@@ -126,7 +167,8 @@ func looksMultiallelic(raw []byte) bool {
 			total++
 			if strings.ContainsAny(c, "/|") {
 				ssrLike++
-			} else if v, err := strconv.Atoi(c); err == nil && v > 2 {
+			} else if v, err := strconv.Atoi(c); err == nil && v > 4 {
+				// Above any dosage (0..4 for tetraploids): an allele size.
 				ssrLike++
 			}
 		}
@@ -165,23 +207,44 @@ type allelePair struct {
 	missing bool
 }
 
-func parseSSRCell(cell string) (allelePair, error) {
+// parseSSRCell parses a one-column call into its allele labels: "152",
+// "152/158", or up to four labels for a tetraploid profile
+// ("150/152/158", "150/150/152/158"). Missing calls return nil.
+func parseSSRCell(cell string, maxAlleles int) ([]string, error) {
 	if ssrMissing[strings.ToLower(cell)] {
-		return allelePair{missing: true}, nil
+		return nil, nil
 	}
 	fields := strings.FieldsFunc(cell, func(r rune) bool { return r == '/' || r == '|' })
-	switch len(fields) {
-	case 1:
-		a := normaliseAllele(fields[0])
-		return allelePair{a: a, b: a}, nil
-	case 2:
-		a, b := normaliseAllele(fields[0]), normaliseAllele(fields[1])
-		if ssrMissing[strings.ToLower(a)] || ssrMissing[strings.ToLower(b)] {
-			return allelePair{missing: true}, nil
-		}
-		return allelePair{a: a, b: b}, nil
+	if len(fields) == 0 {
+		return nil, nil
 	}
-	return allelePair{}, fmt.Errorf("cell %q has %d alleles: BreedOS models diploid inheritance, so polyploid profiles with unknown dosage (e.g. tetraploid potato SSR) are not supported yet", cell, len(fields))
+	if len(fields) > maxAlleles {
+		if maxAlleles == 2 {
+			return nil, fmt.Errorf("cell %q has %d alleles: choose ploidy 4 for tetraploid profiles (e.g. potato); diploid data has at most 2 per cell", cell, len(fields))
+		}
+		return nil, fmt.Errorf("cell %q has %d alleles: BreedOS supports diploid and tetraploid data (at most 4 alleles per cell)", cell, len(fields))
+	}
+	out := make([]string, len(fields))
+	for i, f := range fields {
+		out[i] = normaliseAllele(f)
+		if ssrMissing[strings.ToLower(out[i])] {
+			return nil, nil
+		}
+	}
+	return out, nil
+}
+
+// maxAllelesInCells is the largest number of alleles in any one cell.
+func maxAllelesInCells(lines []string, delim string, first int) int {
+	max := 0
+	for _, l := range lines {
+		for _, c := range splitRow(l, delim)[first:] {
+			if n := len(strings.FieldsFunc(c, func(r rune) bool { return r == '/' || r == '|' })); n > max {
+				max = n
+			}
+		}
+	}
+	return max
 }
 
 // pairColumns decides whether the locus columns come in pairs and returns
@@ -228,9 +291,28 @@ func sortAlleles(labels []string) {
 // parseMultiallelicCSV reads an SSR table into a loadedDataset of
 // indicator markers with a locus layout and consistent phase.
 func parseMultiallelicCSV(raw []byte, sourceFile string) (*loadedDataset, error) {
+	return parseMultiallelicCSVPloidy(raw, sourceFile, 0)
+}
+
+// geneColumnPrefix marks a biallelic gene column inside an SSR table
+// (e.g. "gene:Pi-ta" with 0/1/2 dosages, or +/− presence), used as a
+// pyramiding target (v0.8.11).
+const geneColumnPrefix = "gene:"
+
+type ssrColumn struct {
+	name   string
+	colA   int
+	colB   int // second column of a paired locus; -1 otherwise
+	isGene bool
+}
+
+// parseMultiallelicCSVPloidy is parseMultiallelicCSV with a declared ploidy:
+// 0 = detect (3–4 alleles in any cell means tetraploid), 2 or 4.
+func parseMultiallelicCSVPloidy(raw []byte, sourceFile string, ploidy int) (*loadedDataset, error) {
 	var lines []string
 	var notes []string
-	for _, l := range splitCSVLines(raw) {
+	for _, l := range strings.Split(string(raw), "\n") {
+		l = strings.TrimRight(l, "\r")
 		t := strings.TrimSpace(l)
 		if t == "" {
 			continue
@@ -265,83 +347,174 @@ func parseMultiallelicCSV(raw []byte, sourceFile string) (*loadedDataset, error)
 	if len(header) <= first {
 		return nil, fmt.Errorf("SSR table %s: no locus columns after the id column", sourceFile)
 	}
-	locusCols := header[first:]
-	for len(locusCols) > 0 && !genalex && locusCols[len(locusCols)-1] == "" {
-		locusCols = locusCols[:len(locusCols)-1]
+	last := len(header)
+	for last > first && !genalex && header[last-1] == "" {
+		last--
 	}
-	names, paired := pairColumns(locusCols, genalex)
+	// Ploidy: declared, or detected from the widest cell.
+	widest := maxAllelesInCells(lines[1:], delim, first)
+	switch {
+	case ploidy == 0 && widest > 2:
+		ploidy = 4
+	case ploidy == 0:
+		ploidy = 2
+	}
+	if ploidy != 2 && ploidy != 4 {
+		return nil, fmt.Errorf("SSR table %s: ploidy %d is not supported (2 or 4)", sourceFile, ploidy)
+	}
+	if ploidy == 4 {
+		format += ", tetraploid"
+	}
+	// Gene columns are set aside before pairing detection, so they never
+	// break the two-columns-per-locus pattern.
+	var geneCols []ssrColumn
+	var ssrIdx []int
+	var ssrNames []string
+	var ignored []string
+	for c := first; c < last; c++ {
+		if strings.HasPrefix(strings.ToLower(header[c]), geneColumnPrefix) {
+			geneCols = append(geneCols, ssrColumn{name: strings.TrimSpace(header[c][len(geneColumnPrefix):]), colA: c, colB: -1, isGene: true})
+			continue
+		}
+		if isMetadataColumn(header[c], lines[1:], delim, c) {
+			ignored = append(ignored, header[c])
+			continue
+		}
+		ssrIdx = append(ssrIdx, c)
+		ssrNames = append(ssrNames, header[c])
+	}
+	names, paired := pairColumns(ssrNames, genalex)
 	if paired && !genalex {
 		// Paired columns hold single alleles; a separator in any cell
 		// means the header pattern was a coincidence.
 		for _, l := range lines[1:] {
-			if cells := splitRow(l, delim); len(cells) > first && strings.ContainsAny(strings.Join(cells[first:], ""), "/|") {
-				names, paired = locusCols, false
+			cells := splitRow(l, delim)
+			for _, c := range ssrIdx {
+				if c < len(cells) && strings.ContainsAny(cells[c], "/|") {
+					names, paired = ssrNames, false
+					break
+				}
+			}
+			if !paired {
 				break
 			}
 		}
 	}
+	if paired && ploidy == 4 {
+		return nil, fmt.Errorf("SSR table %s: tetraploid data must use one column per locus (\"150/152/158\")", sourceFile)
+	}
 	if paired && !genalex {
 		format = "two columns per locus"
 	}
+	var columns []ssrColumn
+	for k, n := range names {
+		if paired {
+			columns = append(columns, ssrColumn{name: n, colA: ssrIdx[2*k], colB: ssrIdx[2*k+1]})
+		} else {
+			columns = append(columns, ssrColumn{name: n, colA: ssrIdx[k], colB: -1})
+		}
+	}
+	columns = append(columns, geneCols...)
+
+	// Read every call: allele labels per SSR locus, dosage per gene column
+	// (-1 = missing).
 	type row struct {
-		id    string
-		pairs []allelePair
+		id     string
+		calls  [][]string
+		dosage []int
 	}
 	rows := make([]row, 0, len(lines)-1)
+	packed := false
 	for i, l := range lines[1:] {
 		cells := splitRow(l, delim)
-		if len(cells) < first+len(locusCols) {
-			cells = append(cells, make([]string, first+len(locusCols)-len(cells))...)
+		if len(cells) < last {
+			cells = append(cells, make([]string, last-len(cells))...)
 		}
-		r := row{id: cells[0], pairs: make([]allelePair, len(names))}
+		r := row{id: cells[0], calls: make([][]string, len(columns)), dosage: make([]int, len(columns))}
 		if r.id == "" {
 			return nil, fmt.Errorf("SSR table %s: line %d has an empty id", sourceFile, i+2)
 		}
-		for k := range names {
-			var p allelePair
-			var err error
-			if paired {
-				// A half-missing call ("152", "0") is treated as missing.
-				a, b := cells[first+2*k], cells[first+2*k+1]
-				if ssrMissing[strings.ToLower(a)] || ssrMissing[strings.ToLower(b)] {
-					p = allelePair{missing: true}
-				} else {
-					p = allelePair{a: normaliseAllele(a), b: normaliseAllele(b)}
+		for k, col := range columns {
+			cell := cells[col.colA]
+			switch {
+			case col.isGene:
+				d, err := parseGeneDosage(cell, ploidy)
+				if err != nil {
+					return nil, fmt.Errorf("SSR table %s: line %d, gene %s: %w", sourceFile, i+2, col.name, err)
 				}
-			} else {
-				p, err = parseSSRCell(cells[first+k])
+				r.dosage[k] = d
+			case col.colB >= 0:
+				// A half-missing call ("152", "0") is treated as missing.
+				a, b := cell, cells[col.colB]
+				if !isMissingAllele(a) && !isMissingAllele(b) {
+					r.calls[k] = []string{normaliseAllele(a), normaliseAllele(b)}
+				}
+			default:
+				if ploidy == 2 {
+					if u, ok := unpackAlleles(cell); ok {
+						cell = u
+						packed = true
+					}
+				}
+				labels, err := parseSSRCell(cell, ploidy)
+				if err != nil {
+					return nil, fmt.Errorf("SSR table %s: line %d, locus %s: %w", sourceFile, i+2, col.name, err)
+				}
+				r.calls[k] = labels
 			}
-			if err != nil {
-				return nil, fmt.Errorf("SSR table %s: line %d, locus %s: %w", sourceFile, i+2, names[k], err)
-			}
-			r.pairs[k] = p
 		}
 		rows = append(rows, r)
 	}
 
-	// Allele sets and counts per locus; drop monomorphic loci.
-	info := &ssrInfo{Format: format}
+	// Allele sets per SSR locus (monomorphic loci dropped); gene columns
+	// become single biallelic markers.
+	if packed {
+		format += ", alleles packed as 3+3 digits"
+	}
+	info := &ssrInfo{Format: format, Ploidy: ploidy, IgnoredColumns: ignored}
 	layout := &locusLayout{}
 	type kept struct {
 		col     int
+		gene    bool
 		index   map[string]int
 		weights []float64
+		mean    float64 // gene columns: mean dosage over called rows
 	}
 	var keep []kept
+	var markerNames []string
 	markers := 0
-	for k, name := range names {
+	for k, col := range columns {
+		if col.isGene {
+			var sum, n float64
+			for _, r := range rows {
+				if r.dosage[k] >= 0 {
+					sum += float64(r.dosage[k])
+					n++
+				}
+			}
+			mean := 0.0
+			if n > 0 {
+				mean = sum / n
+			}
+			layout.names = append(layout.names, col.name)
+			layout.start = append(layout.start, markers)
+			layout.alleles = append(layout.alleles, []string{col.name})
+			layout.locusOf = append(layout.locusOf, len(layout.names)-1)
+			markerNames = append(markerNames, col.name)
+			info.GeneColumns = append(info.GeneColumns, col.name)
+			markers++
+			keep = append(keep, kept{col: k, gene: true, mean: mean})
+			continue
+		}
 		count := map[string]int{}
 		for _, r := range rows {
-			p := r.pairs[k]
-			if p.missing {
-				continue
+			for _, a := range r.calls[k] {
+				count[a]++
 			}
-			count[p.a]++
-			count[p.b]++
 		}
 		if len(count) < 2 {
 			if len(count) == 1 {
-				info.Monomorphic = append(info.Monomorphic, name)
+				info.Monomorphic = append(info.Monomorphic, col.name)
 			}
 			continue
 		}
@@ -355,8 +528,9 @@ func parseMultiallelicCSV(raw []byte, sourceFile string) (*loadedDataset, error)
 		for i, a := range labels {
 			index[a] = i
 			weights[i] = float64(count[a])
+			markerNames = append(markerNames, col.name+":"+a)
 		}
-		layout.names = append(layout.names, name)
+		layout.names = append(layout.names, col.name)
 		layout.start = append(layout.start, markers)
 		layout.alleles = append(layout.alleles, labels)
 		for range labels {
@@ -365,48 +539,84 @@ func parseMultiallelicCSV(raw []byte, sourceFile string) (*loadedDataset, error)
 		markers += len(labels)
 		keep = append(keep, kept{col: k, index: index, weights: weights})
 	}
-	if len(keep) == 0 {
+	if markers == 0 {
 		return nil, errors.New("SSR table: no polymorphic locus (every locus has a single allele or no calls)")
 	}
 
-	// Build individuals: dosage per indicator plus a phase that keeps one
-	// allele per strand; missing calls drawn from allele frequencies.
+	// Build individuals. Each strand carries one allele per locus; missing
+	// calls are drawn from allele frequencies, and a tetraploid profile
+	// with fewer than four distinct alleles gets its unknown extra copies
+	// drawn among the alleles it shows.
 	rng := rand.New(rand.NewSource(0x55_8090))
-	out := &loadedDataset{sourceFile: sourceFile, sourceNotes: notes, markerCount: markers, layout: layout, ssr: info}
+	out := &loadedDataset{sourceFile: sourceFile, sourceNotes: notes, markerCount: markers, layout: layout, ssr: info, markerNames: markerNames, ploidy: ploidy}
 	var het, called int
 	for _, r := range rows {
-		o := organism{geno: make([]uint8, markers), phase: make([]uint64, phaseWords(markers))}
+		o := newOrganismPloidy(markers, 0, ploidy)
+		o.ibd = nil
 		for li, kp := range keep {
-			p := r.pairs[kp.col]
+			base := layout.start[li]
+			if kp.gene {
+				d := r.dosage[kp.col]
+				info.TotalCalls++
+				if d < 0 {
+					info.ImputedCalls++
+					d = 0
+					for c := 0; c < ploidy; c++ {
+						if rng.Float64() < kp.mean/float64(ploidy) {
+							d++
+						}
+					}
+				}
+				for c, s := range rng.Perm(ploidy) {
+					if c < d {
+						o.setAllele(base, s, 1)
+					}
+				}
+				continue
+			}
+			call := r.calls[kp.col]
 			info.TotalCalls++
-			var ia, ib int
-			if p.missing {
+			idx := make([]int, 0, ploidy)
+			if call == nil {
 				info.ImputedCalls++
-				ia, ib = drawWeighted(kp.weights, rng), drawWeighted(kp.weights, rng)
+				for c := 0; c < ploidy; c++ {
+					idx = append(idx, drawWeighted(kp.weights, rng))
+				}
 			} else {
-				ia, ib = kp.index[p.a], kp.index[p.b]
 				called++
-				if ia != ib {
+				distinct := map[int]bool{}
+				for _, a := range call {
+					idx = append(idx, kp.index[a])
+					distinct[kp.index[a]] = true
+				}
+				if len(distinct) > 1 {
 					het++
 				}
+				if len(idx) < ploidy {
+					if ploidy > 2 {
+						info.DosageImputed++
+					}
+					for len(idx) < ploidy {
+						idx = append(idx, idx[rng.Intn(len(idx))])
+					}
+				}
 			}
-			if rng.Intn(2) == 1 {
-				ia, ib = ib, ia
-			}
-			base := layout.start[li]
-			o.geno[base+ia]++
-			o.geno[base+ib]++
-			if ia != ib {
-				o.setPhaseBit(base + ib) // allele ib sits on strand B
+			rng.Shuffle(len(idx), func(a, b int) { idx[a], idx[b] = idx[b], idx[a] })
+			for s, a := range idx {
+				o.setAllele(base+a, s, 1)
 			}
 		}
 		out.individuals = append(out.individuals, o)
 		out.accessionIDs = append(out.accessionIDs, r.id)
 	}
-	info.Loci = layout.loci()
-	info.Alleles = markers
+	info.Loci = 0
 	info.MinAlleles, info.MaxAlleles = markers, 0
-	for _, a := range layout.alleles {
+	for li, a := range layout.alleles {
+		if len(a) <= 1 && layout.names[li] == a[0] {
+			continue // gene column
+		}
+		info.Loci++
+		info.Alleles += len(a)
 		if len(a) < info.MinAlleles {
 			info.MinAlleles = len(a)
 		}
@@ -414,10 +624,61 @@ func parseMultiallelicCSV(raw []byte, sourceFile string) (*loadedDataset, error)
 			info.MaxAlleles = len(a)
 		}
 	}
+	if info.Loci == 0 {
+		info.MinAlleles = 0
+	}
 	if called > 0 {
 		info.ObservedHet = round4(float64(het) / float64(called))
 	}
+	if het == 0 && called > 0 && !paired && ploidy == 2 {
+		info.Warnings = append(info.Warnings, "no heterozygous call in the whole table: fine for inbred lines, but if every locus has two columns, their headers were not recognised as a pair and each column was read as its own locus — name them LOCUS_1, LOCUS_2")
+	}
 	return out, nil
+}
+
+// isMetadataColumn reports a sample-description column among the loci: a
+// known header name (species, site, variety…), or a column whose values
+// contain no digit at all (no allele call does).
+func isMetadataColumn(name string, rows []string, delim string, c int) bool {
+	if metadataColumns[strings.ToLower(strings.TrimSpace(name))] || isPopColumn(name) {
+		return true
+	}
+	seen := 0
+	for _, l := range rows {
+		cells := splitRow(l, delim)
+		if c >= len(cells) || isMissingAllele(cells[c]) {
+			continue
+		}
+		v := cells[c]
+		if v == "+" || v == "−" || strings.EqualFold(v, "yes") || strings.EqualFold(v, "no") || v == "да" || v == "нет" {
+			return false // presence calls of an unprefixed gene column
+		}
+		if strings.ContainsAny(v, "0123456789") {
+			return false
+		}
+		seen++
+	}
+	return seen > 0
+}
+
+// parseGeneDosage reads a gene-column cell: 0..ploidy dosage, "+" (present;
+// taken as homozygous, as in inbred lines) or "−"/"-" (absent); missing →
+// -1.
+func parseGeneDosage(cell string, ploidy int) (int, error) {
+	c := strings.ToLower(strings.TrimSpace(cell))
+	switch c {
+	case "+", "yes", "да":
+		return ploidy, nil
+	case "-", "−", "no", "нет":
+		return 0, nil
+	case "", "na", "n/a", "?", ".", "nan":
+		return -1, nil
+	}
+	v, err := strconv.Atoi(c)
+	if err != nil || v < 0 || v > ploidy {
+		return 0, fmt.Errorf("value %q: use 0..%d, + or −", cell, ploidy)
+	}
+	return v, nil
 }
 
 func isPopColumn(name string) bool {
@@ -522,7 +783,10 @@ func resampleMultiallelic(o *organism, l *locusLayout, freq []float64, rng *rand
 	if l == nil {
 		return
 	}
-	if o.phase == nil {
+	ploidy := 2
+	if o.strands != nil {
+		ploidy = len(o.strands)
+	} else if o.phase == nil {
 		o.phase = make([]uint64, phaseWords(len(o.geno)))
 	}
 	for li, labels := range l.alleles {
@@ -532,15 +796,19 @@ func resampleMultiallelic(o *organism, l *locusLayout, freq []float64, rng *rand
 		s := l.start[li]
 		w := make([]float64, len(labels))
 		for a := range labels {
-			o.geno[s+a] = 0
-			o.phase[(s+a)>>6] &^= 1 << (uint(s+a) & 63)
-			w[a] = freq[s+a] + 1e-9
+			m := s + a
+			o.geno[m] = 0
+			if o.strands != nil {
+				for h := range o.strands {
+					o.strands[h][m>>6] &^= 1 << (uint(m) & 63)
+				}
+			} else {
+				o.phase[m>>6] &^= 1 << (uint(m) & 63)
+			}
+			w[a] = freq[m] + 1e-9
 		}
-		ia, ib := drawWeighted(w, rng), drawWeighted(w, rng)
-		o.geno[s+ia]++
-		o.geno[s+ib]++
-		if ia != ib {
-			o.setPhaseBit(s + ib)
+		for h := 0; h < ploidy; h++ {
+			o.setAllele(s+drawWeighted(w, rng), h, 1)
 		}
 	}
 }

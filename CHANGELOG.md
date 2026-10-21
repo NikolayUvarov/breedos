@@ -7,6 +7,104 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-10-21
+
+### Fixed — SSR collection tables that were misread without an error
+
+Published sorghum collection tables (Dryad, PLoS supplements) loaded with
+the wrong loci or with heterozygosity 0.
+
+- Two-column headers `gpsb223_allele 1` / `gpsb223_allele 2` (also
+  `RM1 a1`, `RM1.b`) are now paired. Before, each column was read as its
+  own homozygous locus.
+- Alleles packed into one integer, three digits each (`304304` →
+  304/304; `96096`, whose leading zero a spreadsheet dropped, → 96/96;
+  `000000` = missing), are unpacked. Before, they were read as one
+  allele.
+- `999` is a missing code; before, it was read as an allele.
+- Description columns among the loci (`species`, `site`, `variety`,
+  `farm_ID`, `pop`…, or any column without digits) are skipped and listed
+  in the summary. Before, they broke the pairing of the columns after
+  them.
+- A table with no heterozygous call at all gets a warning that paired
+  headers may not have been recognised.
+
+Checked on four public tables exported as-is; each reads with the same loci and alleles as a hand-cleaned copy:
+- Westengen 2014: 200 × 19 SSR, 274 alleles;
+- Labeyrie 2014: 297 × 18 SSR, 139 alleles;
+- Labeyrie 2016: 321 × 16 SSR, 102 alleles;
+- Ethiopian sweet sorghum 2025: 91 × 13 SSR, 134 alleles.
+
+### Added — autotetraploid populations (potato)
+
+Tetraploid potato SSR profiles (up to four alleles per cell) were rejected,
+and the genetic model was diploid only.
+
+- **Model.** `ploidy: 4` gives four homologues per individual. Meiosis
+  pairs them at random into two bivalents per chromosome, with Haldane
+  crossovers inside each bivalent; a gamete takes one chromatid from each.
+  A duplex parent yields gametes 1 : 4 : 1. Double reduction is not
+  modelled.
+- **Drift and inbreeding.** IBD coancestry runs over all homologue pairs,
+  allele frequency over 4N copies, Ne = 1/(4ΔF). Neutral F after 15
+  generations at N = 120: 0.031 against 0.058 in diploids.
+- **Data.** Tetraploid input is detected from SSR cells with three or four
+  alleles, a `# ploidy: 4` comment, or dosages up to 4. It can also be
+  forced with the upload's ploidy selector. Unknown SSR allele dosage is
+  filled by draws among the alleles observed in that cell and counted as
+  imputed.
+- **Preset.** "Potato-like autotetraploid population".
+- **Diploid-only for now:** SSD/DH line breeding, multi-trait indices,
+  and pyramiding of real gene columns in tetraploid uploads.
+
+### Added — gene pyramiding with marker-assisted selection
+
+Major resistance genes (e.g. rice blast Pi-1 + Pi-2 + Pi-33) do not raise
+the selected trait, so phenotypic and genomic selection do not see them,
+and they drift.
+
+- **Targets.** `target_loci` names columns of an uploaded table, matched
+  case-insensitively with an optional `gene:` prefix. SSR tables can
+  carry biallelic `gene:<name>` columns with 0/1/2 or `+`/`-`.
+  `pyramid_genes: K` (1–8) creates synthetic genes on separate parts of
+  the genome, each carried homozygously by 2 % of founders, with no
+  effect on the trait.
+- **Strategies.**
+  - **MAS gene pyramiding** ranks candidates by favourable target alleles
+    first and phenotype second. Each target is weighted by 1/√p of its
+    current frequency (Jannink 2010). With plain gene counting, plants
+    with two common genes out-ranked the only carriers of a third, and on
+    the 48-line example the third gene was lost in some replicates.
+  - **MAS + OCS (ΔF target)** uses the same ranking with optimum
+    contributions.
+- **Report.**
+  - Per generation: complete-pyramid share (homozygous for every target),
+    carrier share, and target frequencies, plus a "complete pyramid"
+    chart and table column.
+  - Per strategy: generations to 50 % and 90 %, targets lost, and
+    `probability_target_loss`, the share of replicates that lost at least
+    one gene (the mean frequency hides a gene lost in one replicate).
+  - A planning line with textbook population sizes for unlinked genes.
+- **Decision.**
+  - Naming targets adds the constraint "complete pyramid ≥ 90 % of
+    plants".
+  - The complete-pyramid share is a Pareto objective.
+- **Preset.** "Rice: pyramid 3 blast-resistance genes by MAS (SSD
+  lines)". Result:
+  - MAS assembles the pyramid in 90 % of plants by generation 4, at F 0.43;
+  - MAS + OCS does it by generation 5, at F 0.13;
+  - every strategy without markers ends with no complete pyramids and
+    loses 2–3 of the 3 genes.
+- **Example upload** `genotype_ssr_pi.csv`: the 48-line SSR table plus
+  `gene:Pi-1`, `gene:Pi-2` and `gene:Pi-33` screening columns (+/−), each
+  gene in 3 donor lines. It is synthetic. Over 15 SSD cycles with 20 %
+  selection:
+  - MAS completes the pyramid by generation 4, at F 0.82, keeping 13 of
+    57 SSR alleles;
+  - MAS + OCS at ΔF 0.02 completes it by generation 7, at F 0.27,
+    keeping 27 alleles;
+  - at ΔF 0.01 it is too slow for 48 lines (68 % complete pyramids).
+
 ## [0.8.10] - 2026-10-20
 
 ### Fixed — readable upload errors on production

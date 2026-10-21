@@ -8,6 +8,8 @@ const colors = {
   balanced: '#8fffd1',
   balanced_crispr: '#ffd38c',
   ocs: '#f2f2a0',
+  mas_pyramid: '#ff7ad9',
+  mas_ocs: '#c58cff',
   target_env: '#7fe0ff',
   ocs_like: '#c2ff8c',
   cross_planner: '#ffdf70',
@@ -24,6 +26,8 @@ const labels = {
   balanced: 'Balanced',
   balanced_crispr: 'Balanced + CRISPR',
   ocs: 'OCS (ΔF target)',
+  mas_pyramid: 'MAS gene pyramiding',
+  mas_ocs: 'MAS + OCS',
   target_env: 'Target-environment selection',
   ocs_like: 'OCS-like',
   cross_planner: 'Cross planner',
@@ -89,6 +93,10 @@ function requestFromForm() {
     genomic_cycle_years: numberValue('genomic_cycle_years'),
     mating_system: (byId('mating_system') && byId('mating_system').value) || 'random',
     ssd_generations: Math.trunc(numberValue('ssd_generations')),
+    // Data carries its own ploidy; the field applies to synthetic runs.
+    ploidy: (dsVal === 'synthetic' || !dsVal) ? (Math.trunc(numberValue('ploidy')) || 2) : 0,
+    pyramid_genes: Math.trunc(numberValue('pyramid_genes')),
+    target_loci: String((byId('target_loci') && byId('target_loci').value) || '').split(',').map(x => x.trim()).filter(Boolean),
     selection_percent: numberValue('selection_percent'),
     heritability: numberValue('heritability'),
     mutation_rate: numberValue('mutation_rate'),
@@ -239,6 +247,7 @@ function setFormValues(values) {
     if (el.type === 'checkbox') el.checked = Boolean(value);
     // v0.8.5: the request carries ΔF as a fraction; the field is in percent.
     else if (id === 'target_delta_f') el.value = String(Math.round(Number(value) * 1e6) / 1e4);
+    else if (Array.isArray(value)) el.value = value.join(', ');
     else el.value = String(value);
     // v0.8.0: presets now carry a dataset; let the selector's handler
     // hide the upload panel when a preset switches away from uploads.
@@ -255,6 +264,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260505,
     population_size: 8,
     markers: 180,
@@ -277,6 +289,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260505,
     population_size: 400,
     markers: 900,
@@ -299,6 +314,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260505,
     population_size: 2500,
     markers: 800,
@@ -320,11 +338,68 @@ const presets = {
   // selection; GS cycles twice as fast (2.5 vs 5 years) over a 30-year horizon.
   // v0.8.8 — Issue 39. Wheat-style line breeding: crosses → 4 SSD
   // generations → line testing, a 5-year cycle (2.5 years with GS).
+  // v0.8.11. Rice blast-resistance pyramid: 3 synthetic R-genes in a few
+  // donors, SSD line breeding, MAS against selection without markers.
+  rice_pyramid: {
+    dataset: 'synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
+    mating_system: 'ssd',
+    ploidy: 2,
+    pyramid_genes: 3,
+    target_loci: [],
+    ssd_generations: 4,
+    seed: 20261022,
+    population_size: 300,
+    markers: 1200,
+    qtl_count: 50,
+    generations: 12,
+    selection_percent: 10,
+    heritability: 0.4,
+    mutation_rate: 0,
+    crispr_enabled: false,
+    crispr_edits: 0,
+    crispr_intro_percent: 0,
+    strategy_set: 'core',
+    replicates: 5,
+    worker_count: 0,
+    inbreeding_limit: 0.25,
+    diversity_loss_limit: 0.30
+  },
+  // v0.8.11. Autotetraploid outcrossing population (potato-like).
+  potato_tetraploid: {
+    dataset: 'synthetic',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
+    mating_system: 'random',
+    ploidy: 4,
+    pyramid_genes: 0,
+    target_loci: [],
+    seed: 20261023,
+    population_size: 200,
+    markers: 900,
+    qtl_count: 45,
+    generations: 15,
+    selection_percent: 15,
+    heritability: 0.3,
+    mutation_rate: 0,
+    crispr_enabled: false,
+    crispr_edits: 0,
+    crispr_intro_percent: 0,
+    strategy_set: 'core',
+    replicates: 5,
+    worker_count: 0,
+    inbreeding_limit: 0.25,
+    diversity_loss_limit: 0.30
+  },
   wheat_lines: {
     dataset: 'synthetic',
     cycle_years: 5,
     genomic_cycle_years: 2.5,
     mating_system: 'ssd',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     ssd_generations: 4,
     seed: 20261021,
     population_size: 300,
@@ -348,6 +423,9 @@ const presets = {
     cycle_years: 5,
     genomic_cycle_years: 2.5,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20261020,
     population_size: 300,
     markers: 1500,
@@ -370,6 +448,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260505,
     population_size: 240,
     markers: 700,
@@ -398,6 +479,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260601,
     population_size: 800,
     markers: 1500,
@@ -425,6 +509,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -459,6 +546,9 @@ const presets = {
     cycle_years: 0,
     genomic_cycle_years: 0,
     mating_system: 'random',
+    ploidy: 2,
+    pyramid_genes: 0,
+    target_loci: [],
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -648,12 +738,24 @@ function applyPreset(name) {
     large: 'Large fast demo',
     crispr: 'CRISPR seed demo',
     gs_years: 'GS vs phenotype on a calendar axis (5-year vs 2.5-year cycles)',
+    rice_pyramid: 'Rice: pyramid 3 blast-resistance genes by MAS (SSD lines)',
+    potato_tetraploid: 'Potato-like autotetraploid population (random mating)',
     wheat_lines: 'Wheat-style line breeding: crosses → SSD (F5 lines), 5-year cycle, GS at 2.5 years',
     holstein: 'Holstein dairy (educational — no sexes or overlapping generations)',
     methane_dairy_intensity: 'Methane (dairy, intensity) — favourable -0.26 correlation',
     methane_dairy_production: 'Methane (dairy, production) — unfavourable +0.35 correlation'
   };
   markDirty(`${names[name] || name} preset loaded`);
+}
+
+// v0.8.11: genes lost — mean per replicate, and how often any was lost.
+function pyramidLossText(s) {
+  const k = s.metrics[0].target_freq.length;
+  const lost = Number(s.final.targets_lost) || 0;
+  const p = Number(s.final.probability_target_loss) || 0;
+  if (p === 0) return `lost 0/${k}`;
+  if (p === 1) return `lost ${lost}/${k}`;
+  return `a gene lost in ${(100 * p).toFixed(0)}% of reps`;
 }
 
 function renderAll(data, prev) {
@@ -667,6 +769,9 @@ function renderAll(data, prev) {
   drawMetricChart('chart_drift', 'legend_drift', data, prev, 'allele_drift', 'Allele drift');
   drawMetricChart('chart_lost', 'legend_lost', data, prev, 'rare_useful_lost', 'Rare useful loci lost');
   // v0.8.9: SSR runs plot allelic richness in place of fixed loci.
+  const pyramidRun = (data.strategies || []).some(s => s.metrics && s.metrics[0] && s.metrics[0].target_freq);
+  if (byId('chart_pyramid_card')) byId('chart_pyramid_card').hidden = !pyramidRun;
+  if (pyramidRun) drawMetricChart('chart_pyramid', 'legend_pyramid', data, prev, 'pyramid_complete', 'Plants homozygous for all target genes');
   const ssrRun = !!data.loci;
   if (byId('chart_fixed_title')) byId('chart_fixed_title').textContent = ssrRun ? 'SSR alleles retained' : 'Fixed loci';
   if (byId('chart_fixed_hint')) byId('chart_fixed_hint').textContent = ssrRun ? 'alleles still present across all SSR loci — lost alleles do not come back' : 'rapid fixation becomes obvious in tiny populations';
@@ -973,6 +1078,7 @@ function renderStrategyTable(strategies, prev) {
         <td>${fmt(s.final.probability_inbreeding_breach)} / ${fmt(s.final.probability_diversity_collapse)} / ${fmt(s.final.probability_rare_useful_loss)}</td>
         <td>${formatInt(s.final.fixed_loci)}</td>
         <td>${formatInt(s.final.effective_parents)}</td>
+        <td>${s.metrics && s.metrics[0] && s.metrics[0].target_freq ? `${(100 * (Number(s.final.pyramid_complete) || 0)).toFixed(0)}%<br><span>${pyramidLossText(s)}${s.final.pyramid_gen90 ? ` · 90% by gen ${s.final.pyramid_gen90}` : ''}</span>` : '—'}</td>
         <td>${s.final.pareto_optimal ? 'yes' : 'no'}</td>
         <td>${feasibleCell}</td>
         <td>${delta}</td>
@@ -1506,6 +1612,9 @@ function requestSignature(req) {
     cycle_years: Number(req.cycle_years) || 0,
     genomic_cycle_years: Number(req.genomic_cycle_years) || 0,
     mating_system: String(req.mating_system || 'random'),
+    ploidy: Number(req.ploidy) || 0,
+    pyramid_genes: Number(req.pyramid_genes) || 0,
+    target_loci: (req.target_loci || []).join(','),
     ssd_generations: String(req.mating_system) === 'ssd' ? (Number(req.ssd_generations) || 0) : 0,
     selection_percent: Number(req.selection_percent) || 0,
     heritability: Number(req.heritability) || 0,
@@ -1540,6 +1649,9 @@ function changedParams(prevReq, curReq) {
     ['cycle_years', 'cycle years'],
     ['genomic_cycle_years', 'genomic cycle years'],
     ['mating_system', 'mating system'],
+    ['ploidy', 'ploidy'],
+    ['pyramid_genes', 'pyramid genes'],
+    ['target_loci', 'target genes'],
     ['ssd_generations', 'SSD generations'],
     ['selection_percent', 'selection %'],
     ['heritability', 'heritability'],
@@ -1586,7 +1698,8 @@ function strategyCountForRequest(req) {
   const advanced = String(req.strategy_set || 'core') === 'advanced';
   // v0.8.5: advanced adds OCS with a ΔF target (single-trait only).
   const multi = !!(multiTraitState.traits && multiTraitState.traits.length);
-  const base = (advanced ? (multi ? 9 : 10) : 4) + (Number(req.__extra_strategies) || 0);
+  const pyramid = (Number(req.pyramid_genes) || 0) > 0 || (req.target_loci || []).length > 0 ? 2 : 0;
+  const base = (advanced ? (multi ? 9 : 10) : 4) + pyramid + (Number(req.__extra_strategies) || 0);
   const crisprActive = Boolean(req.crispr_enabled) && (Number(req.crispr_edits) || 0) > 0;
   if (!crisprActive) return base;
   return base + (advanced ? 2 : 1);
@@ -2118,6 +2231,7 @@ function setupUploadUI() {
     }
     const fd = new FormData();
     fd.append('genotype', genoEl.files[0]);
+    if (byId('uploadPloidy')) fd.append('ploidy', byId('uploadPloidy').value);
     for (const [field, id] of [['phenotype','uploadPhenotype'],['pedigree','uploadPedigree'],['edits','uploadEdits'],['predictions','uploadPredictions']]) {
       const el = byId(id);
       if (el && el.files && el.files[0]) fd.append(field, el.files[0]);
@@ -2127,10 +2241,12 @@ function setupUploadUI() {
     // by the server; say why here, because the proxy hides 400 bodies.
     const genoText = await genoEl.files[0].text();
     const polyCell = genoText.split(/\r?\n/).filter(l => l.trim() && !l.startsWith('#')).slice(1, 400)
-      .flatMap(l => l.split(/[,;\t]/).slice(1)).find(c => (c.match(/[\/|]/g) || []).length >= 2);
+      .flatMap(l => l.split(/[,;\t]/).slice(1)).find(c => (c.match(/[\/|]/g) || []).length >= ((byId('uploadPloidy') && byId('uploadPloidy').value === '2') ? 2 : 4));
     if (polyCell) {
       if (status) {
-        status.textContent = `upload failed: the cell "${polyCell.trim()}" has three or more alleles. BreedOS models diploid inheritance, so polyploid SSR profiles with unknown dosage (e.g. tetraploid potato) are not supported yet.`;
+        status.textContent = (byId('uploadPloidy') && byId('uploadPloidy').value === '2')
+          ? `upload failed: the cell "${polyCell.trim()}" has three or more alleles but the data was declared diploid; choose ploidy 4 (or detect) for tetraploid profiles.`
+          : `upload failed: the cell "${polyCell.trim()}" has more than four alleles; BreedOS supports diploid and tetraploid data.`;
         status.style.color = 'var(--danger)';
       }
       return;
@@ -2160,7 +2276,7 @@ function setupUploadUI() {
         // The production proxy replaces 400 bodies with its own line;
         // replace that with what the server checks.
         if (/^400 Bad Request \[/.test(text.trim())) {
-          throw new Error('the server could not read one of the files. Genotype: SNP dosages 0/1/2, or SSR allele sizes (152/158 per cell, two columns per locus, or GenAlEx), comma / semicolon / tab separated, one id column first; diploid only. Phenotype: id,value with ids matching the genotype. Files up to 16 MB.');
+          throw new Error('the server could not read one of the files. Genotype: SNP dosages 0/1/2 (0–4 for ploidy 4), or SSR allele sizes (152/158 per cell, up to 4 alleles for tetraploids; two columns per locus; or GenAlEx), comma / semicolon / tab separated, one id column first; gene columns as gene:<name>. Phenotype: id,value with ids matching the genotype. Files up to 16 MB.');
         }
         throw new Error(text || ('HTTP ' + res.status));
       }
@@ -2186,11 +2302,15 @@ function renderUploadSummary(summary, id) {
   if (summary.genotype && summary.genotype.loci) {
     const l = summary.genotype.loci;
     parts.push('<div><strong>Genotype (SSR, ' + esc(l.format) + ')</strong>: ' + summary.genotype.individuals + ' individuals × ' + l.loci + ' loci, ' + l.alleles + ' alleles (' + l.min_alleles_per_locus + '–' + l.max_alleles_per_locus + ' per locus), observed heterozygosity ' + (100 * l.observed_heterozygosity).toFixed(1) + '%'
+      + (l.gene_columns && l.gene_columns.length ? ', gene columns: ' + l.gene_columns.map(esc).join(', ') : '')
+      + (l.dosage_imputed_calls ? ', ' + l.dosage_imputed_calls + ' tetraploid calls with unknown dosage (extra copies drawn among the alleles shown)' : '')
       + (l.imputed_calls ? ', ' + l.imputed_calls + ' of ' + l.total_calls + ' calls missing (imputed from allele frequencies)' : '')
       + (l.dropped_monomorphic && l.dropped_monomorphic.length ? ', monomorphic loci dropped: ' + l.dropped_monomorphic.map(esc).join(', ') : '')
-      + ' (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
+      + (l.ignored_columns && l.ignored_columns.length ? ', description columns ignored: ' + l.ignored_columns.map(esc).join(', ') : '')
+      + ' (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>'
+      + (l.warnings || []).map(w => '<div style="color: var(--warn); margin-top: 4px">⚠ ' + esc(w) + '</div>').join(''));
   } else if (summary.genotype) {
-    parts.push('<div><strong>Genotype</strong>: ' + summary.genotype.individuals + ' individuals × ' + summary.genotype.markers + ' markers (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
+    parts.push('<div><strong>Genotype</strong>: ' + summary.genotype.individuals + ' individuals × ' + summary.genotype.markers + ' markers' + (summary.genotype.ploidy === 4 ? ', tetraploid dosages 0–4' : '') + ' (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
   }
   if (summary.phenotype) {
     parts.push('<div><strong>Phenotype</strong>: ' + summary.phenotype.rows + ' rows, trait <code>' + esc(summary.phenotype.trait_name) + '</code> ∈ [' + summary.phenotype.min.toFixed(3) + ', ' + summary.phenotype.max.toFixed(3) + '], mean ' + summary.phenotype.mean.toFixed(3) + (summary.phenotype.matched_genotype != null ? ', ' + summary.phenotype.matched_genotype + ' matched to genotyped lines' : '') + '</div>');

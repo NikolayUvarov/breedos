@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.10 — SSR markers · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.11 — SSR markers · tetraploids · gene pyramiding (MAS) · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -57,6 +57,8 @@
           <button class="btn tiny" type="button" data-preset="crispr">CRISPR seed</button>
           <button class="btn tiny" type="button" data-preset="gs_years">GS vs phenotype (years)</button>
           <button class="btn tiny" type="button" data-preset="wheat_lines">Wheat lines (SSD, years)</button>
+          <button class="btn tiny" type="button" data-preset="rice_pyramid">Rice: pyramid 3 R-genes</button>
+          <button class="btn tiny" type="button" data-preset="potato_tetraploid">Potato (tetraploid)</button>
           <button class="btn tiny" type="button" data-preset="holstein" title="Educational: the engine has no sexes, no overlapping generations and no bull/cow selection tiers, which drive Ne in real dairy populations.">Holstein dairy (educational)</button>
           <button class="btn tiny" type="button" data-preset="methane_dairy_intensity" title="Educational multi-trait demo; see the Holstein caveat.">Methane MeI (educational)</button>
           <button class="btn tiny" type="button" data-preset="methane_dairy_production" title="Educational multi-trait demo; see the Holstein caveat.">Methane MeP (educational)</button>
@@ -96,6 +98,7 @@
                 Phenotypes (≥ 20 genotyped lines) set the trait architecture via rrBLUP; predictions drive the imported-GEBV strategy; pedigree and edits are shown but not used.
                 Fixture examples: <a href="/upload-fixture/genotype.csv">genotype</a> ·
                 <a href="/upload-fixture/genotype_ssr.csv">genotype (SSR)</a> ·
+                <a href="/upload-fixture/genotype_ssr_pi.csv">SSR + Pi genes</a> ·
                 <a href="/upload-fixture/phenotype.csv">phenotype</a> ·
                 <a href="/upload-fixture/pedigree.csv">pedigree</a> ·
                 <a href="/upload-fixture/edits.csv">edits</a> ·
@@ -103,6 +106,7 @@
               </p>
               <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
                 <label style="font-size:13px;">Genotype CSV <span style="color:var(--warn)">*</span><br><input id="uploadGenotype" type="file" accept=".csv,text/csv"></label>
+                <label style="font-size:13px;">Ploidy of the data<br><select id="uploadPloidy"><option value="0" selected>detect (3–4 SSR alleles per cell = tetraploid)</option><option value="2">2 — diploid</option><option value="4">4 — tetraploid (dosages 0–4, SSR up to 4 alleles)</option></select></label>
                 <label style="font-size:13px;">Phenotype CSV<br><input id="uploadPhenotype" type="file" accept=".csv,text/csv"></label>
                 <label style="font-size:13px;">Pedigree CSV<br><input id="uploadPedigree" type="file" accept=".csv,text/csv"></label>
                 <label style="font-size:13px;">Edits CSV<br><input id="uploadEdits" type="file" accept=".csv,text/csv"></label>
@@ -177,6 +181,33 @@
               <span>SSD only</span>
             </label>
             <input id="ssd_generations" type="number" min="1" max="10" step="1" value="4">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Ploidy <span class="tip" tabindex="0" data-tip="2 = diploid. 4 = autotetraploid (e.g. potato): four homologues, dosage 0–4, random chromosome segregation without double reduction. Uploaded data carries its own ploidy.">?</span></span>
+              <span>synthetic runs</span>
+            </label>
+            <select id="ploidy">
+              <option value="2" selected>2 — diploid</option>
+              <option value="4">4 — autotetraploid (potato)</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Pyramid genes <span class="tip" tabindex="0" data-tip="Synthetic resistance genes to combine by marker-assisted selection, each carried homozygously by its own few donor founders. They do not raise the selected trait. 0 = off. With uploaded data, name gene columns in Target genes instead.">?</span></span>
+              <span>0–8, synthetic</span>
+            </label>
+            <input id="pyramid_genes" type="number" min="0" max="8" step="1" value="0">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Target genes <span class="tip" tabindex="0" data-tip="Comma-separated gene columns of the uploaded genotype table to pyramid by MAS, e.g. Pi-ta, Pi-b (in an SSR table: columns named gene:Pi-ta). The counted allele (dosage 1/2 or +) is the favourable one.">?</span></span>
+              <span>uploaded data</span>
+            </label>
+            <input id="target_loci" type="text" placeholder="Pi-ta, Pi-b, Pi-2" value="">
           </div>
 
           <div class="field">
@@ -570,6 +601,12 @@
           </div>
         </div>
 
+        <div class="card chart-card" id="chart_pyramid_card" hidden>
+          <div class="chart-title"><h3>Gene pyramid</h3><small>share of plants homozygous for every target gene — genes without an effect on the selected trait are invisible to selection without markers</small></div>
+          <canvas id="chart_pyramid" width="900" height="300"></canvas>
+          <div id="legend_pyramid" class="legend"></div>
+        </div>
+
         <div class="card chart-card">
           <div class="chart-title"><h3 id="chart_fixed_title">Fixed loci</h3><small id="chart_fixed_hint">rapid fixation becomes obvious in tiny populations</small></div>
           <canvas id="chart_fixed" width="900" height="300"></canvas>
@@ -632,6 +669,7 @@
                   <th>P(inb/div/loss)</th>
                   <th>Fixed loci</th>
                   <th>Parents</th>
+                  <th>Pyramid</th>
                   <th>Pareto</th>
                   <th>Feasible</th>
                   <th>Δ vs previous</th>

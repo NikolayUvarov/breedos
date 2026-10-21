@@ -156,7 +156,11 @@ Minimal request (omitted fields take defaults):
 `selection_percent` is a percent on a 0–100 scale (`20` = 20%). Values below 1 are rejected. Optional fields:
 - genome: `chromosomes` (default 10), `chromosome_length_morgans` (default 1.0), `genomic_accuracy` (default √h²);
 - time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`).
-- OCS: `target_delta_f` (default 0.01). Request and response shapes live in the handler types at the top of `mvp/main.go`.
+- OCS: `target_delta_f` (default 0.01);
+- ploidy: `ploidy` (2 or 4; 0 = from the data, diploid for synthetic runs);
+- gene pyramiding: `pyramid_genes` (1–8 synthetic target genes) or `target_loci` (column names of an uploaded table).
+
+Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
 Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages (comma, semicolon or tab separated).
 
@@ -165,11 +169,29 @@ Founder-genotype CSVs are `id,m1,...,mN` with 0/1/2 dosages (comma, semicolon or
 - two columns per locus (`RM1_1,RM1_2`);
 - a GenAlEx export.
 
-`0`, `NA`, `-` and `?` mean missing; missing calls are drawn from the locus allele frequencies and counted in the summary. Fragment sizes are rounded to whole base pairs.
+Two-column headers may also be `LOCUS_allele 1` / `LOCUS_allele 2`, and diploid calls packed as 3 + 3 digits (`304304`) are unpacked. Description columns among the loci (species, site, variety…) are skipped.
+
+`0`, `000000`, `999`, `-9`, `NA`, `-` and `?` mean missing; missing calls are drawn from the locus allele frequencies and counted in the summary. Fragment sizes are rounded to whole base pairs.
 
 Each allele becomes an indicator marker, and the indicators of a locus sit at one map position, so a locus is always inherited as a unit. Reports add Nei's expected heterozygosity per locus and `alleles_retained`, the number of SSR alleles each strategy keeps.
 
-Only diploid data is supported: cells with three or more alleles (e.g. tetraploid potato profiles) are rejected. SSR alleles are not CRISPR edit targets.
+SSR alleles are not CRISPR edit targets.
+
+**Autotetraploids (potato-like).** Set `ploidy: 4`, or let the upload detect it: SSR cells with three or four alleles, a `# ploidy: 4` comment line, or dosages up to 4.
+- Each individual carries four homologues. In meiosis they pair at random into two bivalents, cross over within each bivalent, and every gamete takes one chromatid from each, so a duplex parent gives nulliplex : simplex : duplex gametes in 1 : 4 : 1. Double reduction is not modelled.
+- Dosage tables use 0–4. A tetraploid SSR profile (`152/158/164`) does not show allele dosage; the missing copies are drawn among the alleles observed in that cell and counted as imputed.
+- Inbreeding, coancestry and Ne account for 4N gene copies: Ne = 1/(4ΔF).
+- Line breeding (SSD/DH), multi-trait indices and pyramiding of real gene columns are diploid-only for now; synthetic pyramids work in both.
+
+**Gene pyramiding (marker-assisted selection).** Name the target genes — `target_loci: ["Pi1","Pi2","Pi33"]` for columns of an uploaded table (in an SSR table, biallelic `gene:Pi1` columns with 0/1/2 or `+`/`-`) — or ask for `pyramid_genes: K` synthetic genes, each carried homozygously by its own 2 % of founders and without effect on the selected trait.
+- Two strategies are added:
+  - **MAS gene pyramiding** ranks candidates by favourable target alleles first and phenotype second. Each target is weighted by 1/√p of its current frequency (Jannink 2010), so the only carriers of a rare gene are not out-ranked by plants with two common genes.
+  - **MAS + OCS** uses the same ranking with optimum contributions at `target_delta_f`.
+- Example upload: [`genotype_ssr_pi.csv`](mvp/fixtures/upload-toy/genotype_ssr_pi.csv), a synthetic SSR table with `gene:Pi-1`, `gene:Pi-2` and `gene:Pi-33` columns.
+- Per generation the report gives the share of plants homozygous for every target (complete pyramid), carriers of every target, and each target's frequency. Per strategy it gives the generations to 50 % and 90 % complete pyramids, the number of targets lost, and `probability_target_loss`, the share of replicates that lost at least one target.
+- Naming targets adds the constraint "complete pyramid ≥ 90 % of plants", so the best feasible strategy is one that assembles it. The complete-pyramid share is also a Pareto objective.
+- A planning line gives the textbook population sizes for unlinked genes: (1/4)^K of an F2 and (1/2)^K of inbred lines carry all K genes homozygously; ln 0.05 / ln(1−p) plants find one with 95 % probability.
+- The genes have no pathogen behind them: race shifts and durability of resistance are not modelled.
 
 When an upload also carries a phenotype CSV (`id,trait`) for at least 20 of the genotyped lines, the trait architecture comes from your data:
 - marker effects are estimated by SNP-BLUP / rrBLUP, with λ = (1−h²)/h²·Σ2pq and at most 1000 phenotyped lines;
@@ -197,6 +219,9 @@ breedos/
     ├── climate*.go, ancestral.go     climate-stress scenarios
     ├── edit_classifier.go, ngt_classify.go   edit / cross / wait, EU NGT classification
     ├── dataset.go, upload.go, datasets_api.go  founder data loading
+    ├── ssr.go            multi-allelic (SSR) and tetraploid genotype parsing
+    ├── pyramid.go        gene pyramiding targets, MAS scoring, pyramid report
+    ├── effects.go, ocs.go, gxe.go   rrBLUP effects, optimum contributions, climate G×E
     ├── promptbio/        separate experimental substrate; not used by the breeding engine
     └── static/           frontend (vanilla JS, no framework)
 ```
