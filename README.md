@@ -206,7 +206,7 @@ Founders can be phenotyped or unphenotyped lines of the same genotype file. Mark
 
 ## Private data room
 
-Tables that may not be published can be shown in person without publishing them. Put CSV files (genotype tables, as for uploads) in `private/data/` next to the binary and users in `private/auth`, one `user:sha256(user:password)` per line (`./breedos -private-hash user:password` prints one). `/private` asks for the login; logged in, it lists the tables, and the demo offers them under Founder population as "Private: <file>" (`dataset: "private:<file>"`), for that browser session only. Without `private/auth` the route answers 404.
+Tables that may not be published can be shown in person without publishing them. Put CSV files (genotype tables, as for uploads) in `private/data/` next to the binary and users in `private/auth`, one `user:sha256(user:password)` per line (`./breedos -private-hash user:password` prints one; `./set_private_password.sh [password] [user]` writes it to the deployed server, generating a password when none is given). `/private` asks for the login; logged in, it lists the tables, and the demo offers them under Founder population as "Private: <file>" (`dataset: "private:<file>"`), for that browser session only. Without `private/auth` the route answers 404.
 
 ## Project structure
 
@@ -217,6 +217,7 @@ breedos/
 ├── LICENSE
 ├── install.sh            systemd service installer (Linux)
 ├── deploy_breedos.sh     build + ship to a host running the self-update watcher
+├── set_private_password.sh   set a /private login on the deployed server
 └── mvp/
     ├── build.sh          portable static build (CGO_ENABLED=0)
     ├── go.mod            no external dependencies
