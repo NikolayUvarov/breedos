@@ -158,7 +158,7 @@ Minimal request (omitted fields take defaults):
 - time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`).
 - OCS: `target_delta_f` (default 0.01);
 - ploidy: `ploidy` (2 or 4; 0 = from the data, diploid for synthetic runs);
-- gene pyramiding: `pyramid_genes` (1–8 synthetic target genes) or `target_loci` (column names of an uploaded table), `marker_distance_cm` (0 = the marker is the gene).
+- gene pyramiding: `pyramid_genes` (1–8 synthetic target genes) or `target_loci` (column names of an uploaded table), `marker_distance_cm` (0 = the marker is the gene), `backcross_generations` (0 = no MABC strategy) and `recurrent_parent` (an id of the table; default: the best founder without target alleles).
 
 Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
@@ -193,6 +193,7 @@ SSR alleles are not CRISPR edit targets.
 - Per generation the report gives the share of plants homozygous for every target (complete pyramid), carriers of every target, and each target's frequency. Per strategy it gives the generations to 50 % and 90 % complete pyramids, the number of targets lost, and `probability_target_loss`, the share of replicates that lost at least one target.
 - Naming targets adds the constraint "complete pyramid ≥ 90 % of plants", so the best feasible strategy is one that assembles it. The complete-pyramid share is also a Pareto objective.
 - A planning line gives the textbook population sizes for unlinked genes: (1/4)^K of an F2 and (1/2)^K of inbred lines carry all K genes homozygously; ln 0.05 / ln(1−p) plants find one with 95 % probability.
+- **Marker-assisted backcrossing (MABC)** is a third strategy when `backcross_generations` > 0: the F1 with the recurrent parent, then that many backcrosses with foreground selection on the markers and background selection on the share of the recurrent parent's genome (identity by descent at the tracker loci), then intercrossing / line derivation to fix the genes. `recurrent_genome` is reported per generation for every strategy; the textbook expectation without background selection is 1 − (1/2)^(n+1). MABC's F measures convergence on the recurrent parent, which is its goal; the recurrent genome share is a Pareto objective.
 - `marker_distance_cm` makes the marker imperfect: each gene becomes a locus that many cM from its marker (Haldane), in coupling in the founders. MAS selects on the markers; the report gives `pyramid_complete` by gene, `pyramid_by_marker`, and `pyramid_marker_only` — plants that pass marker screening without the full gene set.
 - The genes have no pathogen behind them: race shifts and durability of resistance are not modelled.
 
@@ -224,6 +225,7 @@ breedos/
     ├── dataset.go, upload.go, datasets_api.go  founder data loading
     ├── ssr.go            multi-allelic (SSR) and tetraploid genotype parsing
     ├── pyramid.go        gene pyramiding targets, MAS scoring, linked markers, pyramid report
+    ├── mabc.go           marker-assisted backcrossing (recurrent parent, background selection)
     ├── founders.go       founder set (maximum allele coverage) from an uploaded table
     ├── effects.go, ocs.go, gxe.go   rrBLUP effects, optimum contributions, climate G×E
     ├── promptbio/        separate experimental substrate; not used by the breeding engine

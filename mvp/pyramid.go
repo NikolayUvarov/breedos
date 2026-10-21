@@ -274,7 +274,7 @@ func pyramidSummaryLine(results []StrategyResult, names []string, cycleYears, li
 			mas = r
 			continue
 		}
-		if r.Code == "mas_ocs" {
+		if r.Code == "mas_ocs" || r.Code == "mabc" {
 			continue
 		}
 		if isBaselineStrategy(r.Code) {

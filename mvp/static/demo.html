@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.12 — SSR markers · tetraploids · gene pyramiding (MAS, linked markers) · founder sets · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.13 — SSR markers · tetraploids · gene pyramiding (MAS, linked markers, MABC) · founder sets · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -222,6 +222,22 @@
               <span>0 = perfect marker</span>
             </label>
             <input id="marker_distance_cm" type="number" min="0" max="50" step="0.5" value="0">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Backcrosses (MABC) <span class="tip" tabindex="0" data-tip="Adds a marker-assisted backcrossing strategy: carriers of the target markers are backcrossed to the recurrent parent this many times, selected on the markers and on the share of the recurrent parent's genome, then intercrossed / selfed to fix the genes. 0 = no MABC strategy. Must be below Generations.">?</span></span>
+              <span>0–8, with target genes</span>
+            </label>
+            <input id="backcross_generations" type="number" min="0" max="8" step="1" value="3">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Recurrent parent <span class="tip" tabindex="0" data-tip="Id of the elite line to backcross to (an id of the uploaded table). Empty = the founder with the highest genetic value that carries no target allele.">?</span></span>
+              <span>optional id</span>
+            </label>
+            <input id="recurrent_parent" type="text" placeholder="elite line id" value="">
           </div>
 
           <div class="field">

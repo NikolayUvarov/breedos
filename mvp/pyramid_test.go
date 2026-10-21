@@ -186,3 +186,76 @@ func TestLinkedMarkerPyramidReportsRecombinants(t *testing.T) {
 		t.Fatal("marker_distance_cm without targets must be rejected")
 	}
 }
+
+// v0.8.13 — marker-assisted backcrossing.
+
+// Three backcrosses with background selection recover at least the
+// textbook 93.75 % of the recurrent parent's genome, more than plain MAS
+// keeps, and the pyramid is fixed afterwards.
+func TestMABCRecoversRecurrentGenome(t *testing.T) {
+	req := SimRequest{Seed: 11, PopulationSize: 200, Markers: 600, QTLCount: 40, Generations: 10, SelectionPercent: 15, Heritability: 0.4, StrategySet: "core", Replicates: 2, PyramidGenes: 2, BackcrossGenerations: 3, MatingSystem: matingSSD, SSDGenerations: 3}
+	resp, err := runSimulation(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mabc, mas := findByCode(resp.Strategies, "mabc"), findByCode(resp.Strategies, "mas_pyramid")
+	if mabc == nil {
+		t.Fatal("mabc strategy expected with backcross_generations")
+	}
+	atBC := mabc.Metrics[4].RecurrentGenome // F1 + 3 backcrosses
+	if atBC < expectedRecurrentGenome(3) {
+		t.Fatalf("recurrent genome after BC3 %.3f, want ≥ %.4f with background selection", atBC, expectedRecurrentGenome(3))
+	}
+	if mabc.Final.RecurrentGenome <= mas.Final.RecurrentGenome {
+		t.Fatalf("MABC should keep more of the recurrent parent than MAS: %.3f vs %.3f", mabc.Final.RecurrentGenome, mas.Final.RecurrentGenome)
+	}
+	if mabc.Final.PyramidComplete < 0.8 {
+		t.Fatalf("MABC should fix the pyramid after the backcrosses: %+v", mabc.Final)
+	}
+	found := false
+	for _, l := range resp.Decision.Interpretation {
+		if strings.HasPrefix(l, "Marker-assisted backcrossing to") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("interpretation should report the backcross programme: %v", resp.Decision.Interpretation)
+	}
+	req.BackcrossGenerations = 0
+	if plain, err := runSimulation(req); err != nil || findByCode(plain.Strategies, "mabc") != nil {
+		t.Fatalf("no MABC strategy without backcrosses: %v", err)
+	}
+	req.BackcrossGenerations = 9
+	if _, err := runSimulation(req); err == nil {
+		t.Fatal("F1 + backcrosses ≥ generations must be rejected")
+	}
+}
+
+// A named recurrent parent of an uploaded table is honoured; the name
+// must exist.
+func TestMABCNamedRecurrentParent(t *testing.T) {
+	raw := mustRead(t, "fixtures/upload-toy/genotype_ssr_pi.csv")
+	up, err := parseUploadGenotype(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := putUpload(&UploadedDataset{Genotype: up})
+	req := SimRequest{Seed: 3, Upload: id, QTLCount: 10, Generations: 8, SelectionPercent: 20, Heritability: 0.4, StrategySet: "core", Replicates: 1, TargetLoci: []string{"Pi-1", "Pi-2", "Pi-33"}, BackcrossGenerations: 2, RecurrentParent: "line_10", MatingSystem: matingSSD, SSDGenerations: 2}
+	resp, err := runSimulation(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := false
+	for _, n := range resp.Notes {
+		if strings.Contains(n, "recurrent parent line_10") {
+			ok = true
+		}
+	}
+	if !ok {
+		t.Fatalf("notes should name the recurrent parent: %v", resp.Notes)
+	}
+	req.RecurrentParent = "no_such_line"
+	if _, err := runSimulation(req); err == nil || !strings.Contains(err.Error(), "no_such_line") {
+		t.Fatalf("unknown recurrent parent must be rejected by name, got %v", err)
+	}
+}

@@ -10,6 +10,7 @@ const colors = {
   ocs: '#f2f2a0',
   mas_pyramid: '#ff7ad9',
   mas_ocs: '#c58cff',
+  mabc: '#ffb86b',
   target_env: '#7fe0ff',
   ocs_like: '#c2ff8c',
   cross_planner: '#ffdf70',
@@ -28,6 +29,7 @@ const labels = {
   ocs: 'OCS (ΔF target)',
   mas_pyramid: 'MAS gene pyramiding',
   mas_ocs: 'MAS + OCS',
+  mabc: 'MABC',
   target_env: 'Target-environment selection',
   ocs_like: 'OCS-like',
   cross_planner: 'Cross planner',
@@ -98,6 +100,8 @@ function requestFromForm() {
     pyramid_genes: Math.trunc(numberValue('pyramid_genes')),
     target_loci: String((byId('target_loci') && byId('target_loci').value) || '').split(',').map(x => x.trim()).filter(Boolean),
     marker_distance_cm: numberValue('marker_distance_cm'),
+    backcross_generations: Math.trunc(numberValue('backcross_generations')),
+    recurrent_parent: String((byId('recurrent_parent') && byId('recurrent_parent').value) || '').trim(),
     selection_percent: numberValue('selection_percent'),
     heritability: numberValue('heritability'),
     mutation_rate: numberValue('mutation_rate'),
@@ -269,6 +273,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260505,
     population_size: 8,
     markers: 180,
@@ -295,6 +301,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260505,
     population_size: 400,
     markers: 900,
@@ -321,6 +329,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260505,
     population_size: 2500,
     markers: 800,
@@ -353,6 +363,8 @@ const presets = {
     pyramid_genes: 3,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     ssd_generations: 4,
     seed: 20261022,
     population_size: 300,
@@ -381,6 +393,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20261023,
     population_size: 200,
     markers: 900,
@@ -407,6 +421,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     ssd_generations: 4,
     seed: 20261021,
     population_size: 300,
@@ -434,6 +450,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20261020,
     population_size: 300,
     markers: 1500,
@@ -460,6 +478,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260505,
     population_size: 240,
     markers: 700,
@@ -492,6 +512,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260601,
     population_size: 800,
     markers: 1500,
@@ -523,6 +545,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -561,6 +585,8 @@ const presets = {
     pyramid_genes: 0,
     target_loci: [],
     marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -1090,7 +1116,7 @@ function renderStrategyTable(strategies, prev) {
         <td>${fmt(s.final.probability_inbreeding_breach)} / ${fmt(s.final.probability_diversity_collapse)} / ${fmt(s.final.probability_rare_useful_loss)}</td>
         <td>${formatInt(s.final.fixed_loci)}</td>
         <td>${formatInt(s.final.effective_parents)}</td>
-        <td>${s.metrics && s.metrics[0] && s.metrics[0].target_freq ? `${(100 * (Number(s.final.pyramid_complete) || 0)).toFixed(0)}%${s.final.pyramid_by_marker ? ` <span>(by marker ${(100 * s.final.pyramid_by_marker).toFixed(0)}%)</span>` : ''}<br><span>${pyramidLossText(s)}${s.final.pyramid_gen90 ? ` · 90% by gen ${s.final.pyramid_gen90}` : ''}</span>` : '—'}</td>
+        <td>${s.metrics && s.metrics[0] && s.metrics[0].target_freq ? `${(100 * (Number(s.final.pyramid_complete) || 0)).toFixed(0)}%${s.final.pyramid_by_marker ? ` <span>(by marker ${(100 * s.final.pyramid_by_marker).toFixed(0)}%)</span>` : ''}<br><span>${pyramidLossText(s)}${s.final.pyramid_gen90 ? ` · 90% by gen ${s.final.pyramid_gen90}` : ''}${s.final.recurrent_genome ? ` · RP genome ${(100 * s.final.recurrent_genome).toFixed(0)}%` : ''}</span>` : '—'}</td>
         <td>${s.final.pareto_optimal ? 'yes' : 'no'}</td>
         <td>${feasibleCell}</td>
         <td>${delta}</td>
@@ -1710,7 +1736,7 @@ function strategyCountForRequest(req) {
   const advanced = String(req.strategy_set || 'core') === 'advanced';
   // v0.8.5: advanced adds OCS with a ΔF target (single-trait only).
   const multi = !!(multiTraitState.traits && multiTraitState.traits.length);
-  const pyramid = (Number(req.pyramid_genes) || 0) > 0 || (req.target_loci || []).length > 0 ? 2 : 0;
+  const pyramid = (Number(req.pyramid_genes) || 0) > 0 || (req.target_loci || []).length > 0 ? 2 + ((Number(req.backcross_generations) || 0) > 0 ? 1 : 0) : 0;
   const base = (advanced ? (multi ? 9 : 10) : 4) + pyramid + (Number(req.__extra_strategies) || 0);
   const crisprActive = Boolean(req.crispr_enabled) && (Number(req.crispr_edits) || 0) > 0;
   if (!crisprActive) return base;

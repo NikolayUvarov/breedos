@@ -132,7 +132,11 @@ type SimRequest struct {
 	// v0.8.12. Distance in cM between each target gene and the marker it
 	// is selected on; 0 = the marker is the gene.
 	MarkerDistanceCM float64 `json:"marker_distance_cm"`
-	PyramidGenes     int     `json:"pyramid_genes,omitempty"`
+	// v0.8.13. Marker-assisted backcrossing: number of backcrosses to the
+	// recurrent parent (0 = no MABC strategy) and, optionally, its id.
+	BackcrossGenerations int    `json:"backcross_generations"`
+	RecurrentParent      string `json:"recurrent_parent"`
+	PyramidGenes         int    `json:"pyramid_genes,omitempty"`
 	// v0.8.11. Ploidy: 2 (default) or 4 (autotetraploid, e.g. potato).
 	// Uploaded data carries its own ploidy; this field sets it for
 	// synthetic populations and must agree with the data otherwise.
@@ -266,10 +270,12 @@ type MetricPoint struct {
 	PyramidComplete float64 `json:"pyramid_complete,omitempty"`
 	// v0.8.12. With a linked marker: homozygous for every marker, and
 	// for every marker but not every gene.
-	PyramidByMarker   float64   `json:"pyramid_by_marker,omitempty"`
-	PyramidMarkerOnly float64   `json:"pyramid_marker_only,omitempty"`
-	PyramidCarriers   float64   `json:"pyramid_carriers,omitempty"`
-	TargetFreq        []float64 `json:"target_freq,omitempty"`
+	PyramidByMarker   float64 `json:"pyramid_by_marker,omitempty"`
+	PyramidMarkerOnly float64 `json:"pyramid_marker_only,omitempty"`
+	// v0.8.13. Share of the recurrent parent's genome (IBD at tracker loci).
+	RecurrentGenome float64   `json:"recurrent_genome,omitempty"`
+	PyramidCarriers float64   `json:"pyramid_carriers,omitempty"`
+	TargetFreq      []float64 `json:"target_freq,omitempty"`
 }
 
 type FinalStats struct {
@@ -325,6 +331,8 @@ type FinalStats struct {
 	// carriers lacking a gene.
 	PyramidByMarker   float64 `json:"pyramid_by_marker,omitempty"`
 	PyramidMarkerOnly float64 `json:"pyramid_marker_only,omitempty"`
+	// v0.8.13. Recurrent parent's genome share at the end.
+	RecurrentGenome float64 `json:"recurrent_genome,omitempty"`
 }
 
 type EditCandidate struct {
@@ -366,6 +374,11 @@ type runModel struct {
 	// v0.8.12. The genes behind the markers when they are linked loci
 	// (nil = the marker is the gene).
 	genes []int
+	// v0.8.13. Recurrent parent for backcrossing (set with targets).
+	recurrent     organism
+	recurrentSet  map[uint16]bool
+	recurrentID   string
+	backcrossGens int
 }
 
 func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []float64) runModel {
@@ -1011,6 +1024,25 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	model := newRunModel(req, gm, initial, effects)
 	model.targets = targets
 	model.genes = genes
+	// v0.8.13. Recurrent parent for backcrossing, and its genome share
+	// for every strategy.
+	if len(targets) > 0 {
+		var ids []string
+		if datasetMeta != nil {
+			ids = datasetMeta.accessionIDs
+		}
+		rp, err := chooseRecurrentParent(initial, effects, targets, ids, req.RecurrentParent)
+		if err != nil {
+			return SimResponse{}, err
+		}
+		model.recurrent = clonePopulation(initial[rp : rp+1])[0]
+		model.recurrentSet = recurrentLabelSet(rp, ploidy)
+		model.recurrentID = fmt.Sprintf("founder #%d", rp+1)
+		if rp < len(ids) {
+			model.recurrentID = ids[rp]
+		}
+		model.backcrossGens = req.BackcrossGenerations
+	}
 	// v0.8.7 — Issue 38. Under a climate scenario, selection uses the
 	// normal-season effects while every metric is on the target mix of
 	// seasons (gxe.go).
@@ -1110,6 +1142,9 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 			src = fmt.Sprintf("synthetic genes, each carried homozygously by its own %.0f%% of founders", 100*pyramidDonorShare)
 		}
 		notes = append(notes, fmt.Sprintf("Gene pyramiding: %d target genes (%s) — %s. Target genes do not act on the selected trait; MAS ranks candidates by target alleles first, then by phenotype. pyramid_complete is the share of individuals homozygous for every target.", len(targets), strings.Join(targetNames, ", "), src))
+		if req.BackcrossGenerations > 0 {
+			notes = append(notes, fmt.Sprintf("Marker-assisted backcrossing: recurrent parent %s (%s); the F1 cross and %d backcrosses with foreground selection on the markers and background selection on the recurrent parent's genome (identity by descent at the tracker loci), then intercrossing / line derivation under the run's mating system. Expected recurrent genome without background selection: 1 − (1/2)^(n+1) = %.1f%%. recurrent_genome is reported for every strategy.", model.recurrentID, recurrentHow(req), req.BackcrossGenerations, 100*expectedRecurrentGenome(req.BackcrossGenerations)))
+		}
 		if len(genes) > 0 {
 			notes = append(notes, fmt.Sprintf("Linked markers: each gene sits %.1f cM from the marker it is selected on (Haldane r = %.3f per meiosis). Founders carry marker and gene in coupling; recombination separates them. MAS sees the markers only; pyramid_complete counts the genes, pyramid_by_marker the markers, pyramid_marker_only the plants that pass marker screening without the full gene set.", req.MarkerDistanceCM, haldaneR(req.MarkerDistanceCM)))
 		}
@@ -1140,6 +1175,14 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	}
 	if len(targets) > 0 {
 		if line := pyramidSummaryLine(results, targetNames, req.CycleYears, req.MarkerDistanceCM); line != "" {
+			decision.Interpretation = append(decision.Interpretation, line)
+		}
+		if line := mabcSummaryLine(results, func(r StrategyResult) float64 {
+			if bc := req.BackcrossGenerations + 1; bc < len(r.Metrics) {
+				return r.Metrics[bc].RecurrentGenome
+			}
+			return r.Final.RecurrentGenome
+		}, req, model.recurrentID); line != "" {
 			decision.Interpretation = append(decision.Interpretation, line)
 		}
 		decision.Interpretation = append(decision.Interpretation, pyramidPlanningLine(len(targets), req))
@@ -1347,6 +1390,9 @@ func buildStrategyConfigs(req SimRequest) []strategyConfig {
 	if pyramidRequested(req) {
 		strategies = append(strategies, strategyConfig{Name: "MAS gene pyramiding", Code: "mas_pyramid", Summary: "Marker-assisted selection: ranks candidates first by how many favourable target-gene alleles they carry, then by phenotype, to combine all target genes in one line.", Rule: "mas_pyramid", MatingRule: "random", TraitWeight: 1.0, ParentMultiplier: 1.0})
 		strategies = append(strategies, strategyConfig{Name: "MAS + OCS (ΔF target)", Code: "mas_ocs", Summary: "The same target-gene ranking, with parent contributions chosen by optimum contribution selection so coancestry rises by target_delta_f per generation: the pyramid assembles more slowly, inbreeding stays controlled.", Rule: "mas_ocs", MatingRule: "allocated", TraitWeight: 1.0, ParentMultiplier: 1.0})
+		if req.BackcrossGenerations > 0 {
+			strategies = append(strategies, strategyConfig{Name: "Marker-assisted backcrossing (MABC)", Code: "mabc", Summary: "Backcrosses the marker carriers to the recurrent parent for backcross_generations, selecting on the markers (foreground) and on the share of the recurrent parent's genome (background), then intercrosses / selfs the carriers to fix the genes.", Rule: "mabc", MatingRule: "backcross", TraitWeight: 1.0, ParentMultiplier: 1.0})
+		}
 	}
 	if req.CrisprEnabled && req.CrisprEdits > 0 {
 		strategies = append(strategies, strategyConfig{Name: "Balanced + CRISPR seed", Code: "balanced_crispr", Summary: "Demonstrates edit-aware integration: prioritize beneficial loci, seed them into part of the founding population, then run balanced selection.", Rule: "score", MatingRule: "random", TraitWeight: 0.85, NoveltyWeight: 0.50, ParentMultiplier: 1.60, UseCrisprSeed: true})
@@ -1617,7 +1663,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	metricCount := len(reps[0].Metrics)
 	metrics := make([]MetricPoint, metricCount)
 	for genIdx := 0; genIdx < metricCount; genIdx++ {
-		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles, pyrComplete, pyrCarriers, pyrMarker, pyrOnly float64
+		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles, pyrComplete, pyrCarriers, pyrMarker, pyrOnly, rpShare float64
 		var targetFreq []float64
 		for _, rep := range reps {
 			p := rep.Metrics[genIdx]
@@ -1626,6 +1672,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 			pyrCarriers += p.PyramidCarriers
 			pyrMarker += p.PyramidByMarker
 			pyrOnly += p.PyramidMarkerOnly
+			rpShare += p.RecurrentGenome
 			if p.TargetFreq != nil {
 				if targetFreq == nil {
 					targetFreq = make([]float64, len(p.TargetFreq))
@@ -1650,7 +1697,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 		for k := range targetFreq {
 			targetFreq[k] = round4(targetFreq[k] / den)
 		}
-		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), PyramidComplete: round4(pyrComplete / den), PyramidCarriers: round4(pyrCarriers / den), PyramidByMarker: round4(pyrMarker / den), PyramidMarkerOnly: round4(pyrOnly / den), TargetFreq: targetFreq, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
+		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), PyramidComplete: round4(pyrComplete / den), PyramidCarriers: round4(pyrCarriers / den), PyramidByMarker: round4(pyrMarker / den), PyramidMarkerOnly: round4(pyrOnly / den), RecurrentGenome: round4(rpShare / den), TargetFreq: targetFreq, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
 	}
 	// v0.7.20 — Issue 20. Fill in Ne[t] = 1 / (2 ΔF) over the metrics slice.
 	populateNeTrajectoryPloidy(metrics, req.Ploidy)
@@ -1693,6 +1740,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	if finalMetric.TargetFreq != nil {
 		final.PyramidComplete, final.PyramidCarriers = finalMetric.PyramidComplete, finalMetric.PyramidCarriers
 		final.PyramidByMarker, final.PyramidMarkerOnly = finalMetric.PyramidByMarker, finalMetric.PyramidMarkerOnly
+		final.RecurrentGenome = finalMetric.RecurrentGenome
 		final.PyramidGen50, final.PyramidGen90 = pyramidMilestones(metrics)
 		var lostSum, lossEvents int
 		for _, rep := range reps {
@@ -1789,8 +1837,8 @@ func isBaselineStrategy(code string) bool { return code == "neutral" || code == 
 func dominates(a, b FinalStats) bool {
 	// v0.8.11: with pyramiding targets the complete-pyramid share is an
 	// objective too (it is 0 for every strategy otherwise).
-	betterOrEqual := a.GeneticGain >= b.GeneticGain && a.Diversity >= b.Diversity && a.Inbreeding <= b.Inbreeding && a.ProbabilityDiversityCollapse <= b.ProbabilityDiversityCollapse && a.ProbabilityRareUsefulLoss <= b.ProbabilityRareUsefulLoss && a.PyramidComplete >= b.PyramidComplete
-	strictlyBetter := a.GeneticGain > b.GeneticGain || a.Diversity > b.Diversity || a.Inbreeding < b.Inbreeding || a.ProbabilityDiversityCollapse < b.ProbabilityDiversityCollapse || a.ProbabilityRareUsefulLoss < b.ProbabilityRareUsefulLoss || a.PyramidComplete > b.PyramidComplete
+	betterOrEqual := a.GeneticGain >= b.GeneticGain && a.Diversity >= b.Diversity && a.Inbreeding <= b.Inbreeding && a.ProbabilityDiversityCollapse <= b.ProbabilityDiversityCollapse && a.ProbabilityRareUsefulLoss <= b.ProbabilityRareUsefulLoss && a.PyramidComplete >= b.PyramidComplete && a.RecurrentGenome >= b.RecurrentGenome
+	strictlyBetter := a.GeneticGain > b.GeneticGain || a.Diversity > b.Diversity || a.Inbreeding < b.Inbreeding || a.ProbabilityDiversityCollapse < b.ProbabilityDiversityCollapse || a.ProbabilityRareUsefulLoss < b.ProbabilityRareUsefulLoss || a.PyramidComplete > b.PyramidComplete || a.RecurrentGenome > b.RecurrentGenome
 	return betterOrEqual && strictlyBetter
 }
 func combinedRisk(f FinalStats) float64 {
@@ -2455,6 +2503,18 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	if req.MarkerDistanceCM > 0 && req.PyramidGenes == 0 && len(req.TargetLoci) == 0 {
 		return errors.New("marker_distance_cm needs target genes: set pyramid_genes or target_loci")
 	}
+	if req.BackcrossGenerations < 0 || req.BackcrossGenerations > maxBackcrossGenerations {
+		return fmt.Errorf("backcross_generations must be between 0 (no MABC) and %d", maxBackcrossGenerations)
+	}
+	if req.BackcrossGenerations > 0 && !pyramidRequested(req) {
+		return errors.New("backcross_generations needs target genes: set pyramid_genes or target_loci")
+	}
+	if req.BackcrossGenerations > 0 && req.BackcrossGenerations+1 >= req.Generations {
+		return errors.New("backcross_generations plus the F1 cross must be below generations, so the genes can be fixed after the backcrosses")
+	}
+	if req.RecurrentParent != "" && req.BackcrossGenerations == 0 {
+		return errors.New("recurrent_parent needs backcross_generations above 0")
+	}
 	if (req.PyramidGenes > 0 || len(req.TargetLoci) > 0) && len(req.Traits) > 0 {
 		return errors.New("gene pyramiding is available for single-trait runs")
 	}
@@ -2677,13 +2737,20 @@ func clonePopulation(pop []organism) []organism {
 
 func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects, selEffects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
-	mc := metricContext{effects: effects, baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: baseMean, sigmaA0: model.sigmaA0, rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: model.genome.layout, targets: model.targets, genes: model.genes}
+	mc := metricContext{effects: effects, baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: baseMean, sigmaA0: model.sigmaA0, rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: model.genome.layout, targets: model.targets, genes: model.genes, recurrent: model.recurrentSet}
 	metrics = append(metrics, computeMetrics(0, pop, mc, 0))
 	cycle := cycleYearsFor(req, cfg)
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
 		parents := selectParents(pop, selEffects, req, cfg, model, rng, gen)
-		pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
-		deriveLines(pop, model.matingSystem, model.ssdGenerations, model.genome, req.MutationRate, rng)
+		if cfg.MatingRule == "backcross" && gen <= model.backcrossGens+1 {
+			// v0.8.13. The F1 cross and then backcross_generations
+			// backcrosses: carriers × recurrent parent, no selfing in
+			// between.
+			pop = backcrossGeneration(pop, parents, &model.recurrent, model.genome, req.MutationRate, rng)
+		} else {
+			pop = makeNextGeneration(pop, parents, model.genome, req.MutationRate, rng, cfg.MatingRule)
+			deriveLines(pop, model.matingSystem, model.ssdGenerations, model.genome, req.MutationRate, rng)
+		}
 		m := computeMetrics(gen, pop, mc, distinctParents(parents))
 		m.Year = round4(float64(gen) * cycle)
 		metrics = append(metrics, m)
@@ -2759,8 +2826,23 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 	meanN, varN := meanVar(novelties)
 	stdN := math.Sqrt(math.Max(varN, 1e-9))
 	var targetW []float64
-	if cfg.Rule == "mas_pyramid" || cfg.Rule == "mas_ocs" {
+	if cfg.Rule == "mas_pyramid" || cfg.Rule == "mas_ocs" || cfg.Rule == "mabc" {
 		targetW = targetWeights(freq, model.targets, n, ploidy)
+	}
+	// v0.8.13. Background selection: the recurrent parent's genome share,
+	// standardised so it ranks the carriers ahead of the phenotype.
+	var zRP []float64
+	if cfg.Rule == "mabc" {
+		shares := make([]float64, n)
+		for i := range pop {
+			shares[i] = recurrentShareOf(&pop[i], model.recurrentSet)
+		}
+		meanR, varR := meanVar(shares)
+		stdR := math.Sqrt(math.Max(varR, 1e-9))
+		zRP = make([]float64, n)
+		for i := range shares {
+			zRP[i] = (shares[i] - meanR) / stdR
+		}
 	}
 	scored := make([]scoredIndividual, n)
 	for i := range pop {
@@ -2793,6 +2875,10 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 			score = zTrait
 		case "mas_pyramid", "mas_ocs":
 			score = pyramidTargetWeight*targetScore(&pop[i], model.targets, targetW, ploidy) + zTrait
+		case "mabc":
+			// Foreground first: no background score can lift a plant
+			// past one that carries more target alleles.
+			score = mabcForegroundWeight*targetScore(&pop[i], model.targets, targetW, ploidy) + mabcBackgroundWeight*zRP[i] + mabcTraitWeight*zTrait
 		case "genomic":
 			score = (genomicPred - meanG) / stdG
 		case "imported_gebv":
@@ -2829,6 +2915,12 @@ func selectParents(pop []organism, effects []float64, req SimRequest, cfg strate
 			target = defaultTargetDeltaF
 		}
 		return selectOCSTarget(pop, scored, target, rng)
+	}
+	// v0.8.13. Convergent backcrossing: every target gene keeps its share
+	// of the parents, or the family of a gene that scores lower this
+	// generation is dropped and the gene with it.
+	if cfg.Rule == "mabc" && len(model.targets) > 1 {
+		return balancedCarriers(pop, scored, model.targets, parentCount)
 	}
 	parents := make([]int, parentCount)
 	for i := 0; i < parentCount; i++ {
@@ -2977,10 +3069,11 @@ type metricContext struct {
 	baseDiversity     float64
 	baseMean, sigmaA0 float64
 	rareUsefulAtStart []int
-	betweenLines      bool         // v0.8.8: coancestry among lines (line breeding)
-	layout            *locusLayout // v0.8.9: multi-allelic loci
-	targets           []int        // v0.8.11: pyramiding target markers
-	genes             []int        // v0.8.12: linked genes behind the markers
+	betweenLines      bool            // v0.8.8: coancestry among lines (line breeding)
+	layout            *locusLayout    // v0.8.9: multi-allelic loci
+	targets           []int           // v0.8.11: pyramiding target markers
+	genes             []int           // v0.8.12: linked genes behind the markers
+	recurrent         map[uint16]bool // v0.8.13: recurrent parent's IBD labels
 }
 
 func computeMetrics(gen int, pop []organism, c metricContext, effectiveParents int) MetricPoint {
@@ -3005,7 +3098,8 @@ func computeMetrics(gen int, pop []organism, c metricContext, effectiveParents i
 	if c.genes != nil {
 		byMarker, markerOnly = markerPyramidStatus(pop, c.targets, c.genes)
 	}
-	return MetricPoint{PyramidComplete: complete, PyramidCarriers: carriers, PyramidByMarker: byMarker, PyramidMarkerOnly: markerOnly, TargetFreq: targetFreq, Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
+	rpShare := recurrentShare(pop, c.recurrent)
+	return MetricPoint{PyramidComplete: complete, PyramidCarriers: carriers, PyramidByMarker: byMarker, PyramidMarkerOnly: markerOnly, RecurrentGenome: rpShare, TargetFreq: targetFreq, Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
 }
 func fixationStats(freq []float64, effects []float64) (fixed, favorableFixed, unfavorableFixed int) {
 	for i, p := range freq {
@@ -3263,6 +3357,8 @@ func recommendationFor(code string, f FinalStats) string {
 		return "Use to assemble the target genes fastest; watch coancestry, since selecting on a few donor families raises it quickly — compare with MAS + OCS." + riskText
 	case "mas_ocs":
 		return "Use to assemble the target genes while holding inbreeding at target_delta_f per generation; slower than plain MAS, without the bottleneck." + riskText
+	case "mabc":
+		return "Use to move the target genes into an elite line and get its genome back; F here measures convergence on the recurrent parent, the goal of backcrossing, not a risk — judge it by recurrent_genome, the pyramid and the alleles kept."
 	case "ocs":
 		return "Use to hold inbreeding at a chosen rate: it maximises expected gain per generation at exactly target_delta_f (1% ≈ Ne 50). Under mass selection on phenotype its gain at equal ΔF is comparable to truncation; the advantage grows with EBVs that carry family information." + riskText
 	case "ocs_like":

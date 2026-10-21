@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-10-21
+
+### Added — marker-assisted backcrossing (MABC)
+
+The standard way to move resistance genes into an elite variety was
+missing: plain MAS intercrosses donors and loses the elite background.
+
+- `backcross_generations` (1–8) adds the strategy **Marker-assisted
+  backcrossing**: the F1 with the recurrent parent, then that many
+  backcrosses with foreground selection on the markers and background
+  selection on the recurrent parent's genome share (identity by descent
+  at the tracker loci), then intercrossing / line derivation under the
+  run's mating system to fix the genes.
+- `recurrent_parent` names the elite line (an id of the uploaded table);
+  by default it is the founder with the highest genetic value that
+  carries no target allele.
+- Convergent design: every target gene keeps an equal quota of the
+  parents in each generation, so no donor family is dropped while the
+  genes are still in separate lines.
+- `recurrent_genome` is reported per generation for every strategy; the
+  textbook expectation without background selection, 1 − (1/2)^(n+1), is
+  printed next to the simulated value. It is a Pareto objective.
+- Rice preset (3 genes, SSD, 3 backcrosses): carriers hold 96.9 % of the
+  recurrent parent's genome after BC3 (93.8 % expected without background
+  selection), 99.3 % at the end, with 90 % complete pyramids by
+  generation 8. Plain MAS assembles the pyramid by generation 4 but keeps
+  0 % of that parent's genome.
+- MABC's F measures convergence on the recurrent parent, which is its
+  goal; the recommendation text says so.
+
 ## [0.8.12] - 2026-10-21
 
 ### Added — linked markers (the marker is not the gene)
