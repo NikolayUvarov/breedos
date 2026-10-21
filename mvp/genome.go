@@ -82,6 +82,98 @@ type genomeMap struct {
 	layout *locusLayout
 	// v0.8.11 — ploidy (0 or 2 = diploid, 4 = autotetraploid).
 	ploidyN int
+	// v0.8.12 — linked loci (genes selected on a marker some cM away).
+	// They sit after every chromosome range, at index chromStart[C]+j,
+	// and are inherited with the crossovers of their chromosome.
+	linked []linkedLocus
+}
+
+type linkedLocus struct {
+	chrom int
+	posM  float64
+}
+
+// chromOf is the chromosome holding marker m (chromosome ranges only).
+func (gm *genomeMap) chromOf(m int) int {
+	c := sort.SearchInts(gm.chromStart, m+1) - 1
+	if c < 0 {
+		c = 0
+	}
+	if last := len(gm.chromStart) - 2; c > last {
+		c = last
+	}
+	return c
+}
+
+// addLinkedLoci appends one locus per marker, cM away on the marker's
+// chromosome (on the far side if the chromosome ends first), and returns
+// their indices. Linked loci carry no IBD label, are never mutated, and in
+// a multi-allelic layout form single-allele loci named "<marker> (gene)".
+func (gm *genomeMap) addLinkedLoci(markers []int, names []string, cM float64) []int {
+	out := make([]int, len(markers))
+	if gm.layout != nil {
+		gm.layout = gm.layout.clone()
+	}
+	for k, m := range markers {
+		c := gm.chromOf(m)
+		d := cM / 100
+		pos := gm.posM[m] + d
+		if pos > gm.lengthM[c] {
+			pos = gm.posM[m] - d
+		}
+		if pos < 0 {
+			pos = 0
+			if gm.lengthM[c]-gm.posM[m] > gm.posM[m] {
+				pos = gm.lengthM[c]
+			}
+		}
+		out[k] = gm.markers
+		gm.linked = append(gm.linked, linkedLocus{chrom: c, posM: pos})
+		gm.posM = append(gm.posM, pos)
+		gm.trackerOf = append(gm.trackerOf, -1)
+		if gm.layout != nil {
+			name := names[k] + " (gene)"
+			gm.layout.names = append(gm.layout.names, name)
+			gm.layout.start = append(gm.layout.start, gm.markers)
+			gm.layout.alleles = append(gm.layout.alleles, []string{name})
+			gm.layout.locusOf = append(gm.layout.locusOf, len(gm.layout.names)-1)
+		}
+		gm.markers++
+	}
+	return out
+}
+
+// linkedIndex is the marker index of the j-th linked locus.
+func (gm *genomeMap) linkedIndex(j int) int { return gm.chromStart[len(gm.chromStart)-1] + j }
+
+// extendLinked gives every individual the linked loci, in coupling phase
+// with their markers: each homologue carries at the gene the allele it
+// carries at the marker.
+func extendLinked(pop []organism, markers, genes []int, total int) {
+	for i := range pop {
+		o := &pop[i]
+		geno := make([]uint8, total)
+		copy(geno, o.geno)
+		o.geno = geno
+		ploidy := 2
+		if o.strands != nil {
+			ploidy = len(o.strands)
+			for s := range o.strands {
+				ns := make([]uint64, phaseWords(total))
+				copy(ns, o.strands[s])
+				o.strands[s] = ns
+			}
+		} else {
+			np := make([]uint64, phaseWords(total))
+			copy(np, o.phase)
+			o.phase = np
+		}
+		for k, m := range markers {
+			for s := 0; s < ploidy; s++ {
+				o.setAllele(genes[k], s, o.allele(m, s))
+			}
+		}
+	}
 }
 
 func phaseWords(markers int) int { return (markers + 63) / 64 }
@@ -378,6 +470,7 @@ func (gm *genomeMap) transmit(parent, child *organism, s int, mutationRate float
 	T := len(gm.trackers)
 	for c := 0; c+1 < len(gm.chromStart); c++ {
 		strand := rng.Intn(2)
+		strand0 := strand
 		k := poisson(gm.lengthM[c], rng)
 		xo = xo[:0]
 		for j := 0; j < k; j++ {
@@ -385,6 +478,17 @@ func (gm *genomeMap) transmit(parent, child *organism, s int, mutationRate float
 		}
 		sort.Float64s(xo)
 		next := 0
+		for j, l := range gm.linked {
+			if l.chrom != c {
+				continue
+			}
+			m := gm.linkedIndex(j)
+			a := parent.allele(m, strand0^(sort.SearchFloat64s(xo, l.posM)&1))
+			child.geno[m] += a
+			if s == 1 && a == 1 {
+				child.setPhaseBit(m)
+			}
+		}
 		for m := gm.chromStart[c]; m < gm.chromStart[c+1]; m++ {
 			for next < len(xo) && xo[next] < gm.posM[m] {
 				strand ^= 1
@@ -420,6 +524,7 @@ func (gm *genomeMap) transmitPolyploid(parent, child *organism, first int, mutat
 		for b := 0; b < 2; b++ {
 			pair := [2]int{perm[2*b], perm[2*b+1]}
 			side := rng.Intn(2)
+			side0 := side
 			k := poisson(gm.lengthM[c], rng)
 			xo = xo[:0]
 			for j := 0; j < k; j++ {
@@ -428,6 +533,13 @@ func (gm *genomeMap) transmitPolyploid(parent, child *organism, first int, mutat
 			sort.Float64s(xo)
 			next := 0
 			target := first + b
+			for j, l := range gm.linked {
+				if l.chrom != c {
+					continue
+				}
+				m := gm.linkedIndex(j)
+				child.setAllele(m, target, parent.allele(m, pair[side0^(sort.SearchFloat64s(xo, l.posM)&1)]))
+			}
 			for m := gm.chromStart[c]; m < gm.chromStart[c+1]; m++ {
 				for next < len(xo) && xo[next] < gm.posM[m] {
 					side ^= 1

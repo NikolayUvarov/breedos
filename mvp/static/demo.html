@@ -23,7 +23,7 @@
       <span>Not a wet-lab protocol, not a guide-RNA designer, not a deployable recommendation without your own genotype/phenotype data and domain review. See <em>Model limitations</em> and <em>What could make this recommendation wrong?</em> in the decision report below.</span>
     </div>
     <div class="card" style="margin-bottom:18px">
-      <div class="kicker">MVP v0.8.11 — SSR markers · tetraploids · gene pyramiding (MAS) · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
+      <div class="kicker">MVP v0.8.12 — SSR markers · tetraploids · gene pyramiding (MAS, linked markers) · founder sets · linked genome · IBD inbreeding · calendar time · OCS · your phenotypes · climate G×E · SSD/DH lines · constraints · strategy comparison · Pareto · decision report · edit-vs-cross-vs-wait</div>
       <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Selection Strategy Simulator</h1>
       <p class="lede">
         Compare selection strategies as an early decision engine: Monte Carlo replicates, neutral/random baselines, genomic selection mockups, OCS-like constraints, cross planning, Pareto trade-offs, risk probabilities, and minimal CRISPR-aware edit introgression.
@@ -93,8 +93,8 @@
               <p style="margin:0 0 10px; font-size:13px; color:var(--muted)">
                 Provide a genotype CSV (required): SNP dosages <code>id,marker_1,...,marker_N</code> with values <code>0</code>/<code>1</code>/<code>2</code>,
                 or <strong>SSR allele sizes</strong> — one column per locus with <code>152/158</code> (or <code>152</code> for a homozygous call),
-                two columns per locus (<code>RM1_1,RM1_2</code>), or a GenAlEx export; <code>,</code> <code>;</code> or tab separated, <code>0</code>/<code>NA</code> = missing.
-                Diploid only (tetraploid SSR profiles are rejected).
+                two columns per locus (<code>RM1_1,RM1_2</code> or <code>RM1_allele 1,RM1_allele 2</code>), packed <code>304304</code>, or a GenAlEx export; <code>,</code> <code>;</code> or tab separated, <code>0</code>/<code>999</code>/<code>NA</code> = missing; description columns (species, site, variety) are skipped.
+                Tetraploids: up to 4 alleles per cell or dosages 0–4. Gene columns <code>gene:Pi-1</code> (+/− or 0/1/2) are pyramiding targets.
                 Phenotypes (≥ 20 genotyped lines) set the trait architecture via rrBLUP; predictions drive the imported-GEBV strategy; pedigree and edits are shown but not used.
                 Fixture examples: <a href="/upload-fixture/genotype.csv">genotype</a> ·
                 <a href="/upload-fixture/genotype_ssr.csv">genotype (SSR)</a> ·
@@ -117,6 +117,12 @@
                 <span id="uploadStatus" style="font-size:13px; color:var(--muted)">no upload yet</span>
               </div>
               <div id="uploadSummary" hidden style="margin-top:10px; font-size:13px;"></div>
+              <div id="founderSetBox" hidden style="margin-top:10px; font-size:13px; display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+                <span><strong>Founder set</strong> <span class="tip" tabindex="0" data-tip="If a programme starts from n accessions of this table, which n keep the most alleles? Greedy maximum coverage, compared with random sets of the same size.">?</span></span>
+                <label style="display:flex; gap:6px; align-items:center;">n = <input id="founderSetSize" type="number" min="1" max="5000" step="1" value="20" style="width:70px"></label>
+                <button id="founderSetBtn" class="btn" type="button">Which accessions keep the most alleles?</button>
+                <div id="founderSetOut" style="flex-basis:100%"></div>
+              </div>
             </div>
           </div>
 
@@ -208,6 +214,14 @@
               <span>uploaded data</span>
             </label>
             <input id="target_loci" type="text" placeholder="Pi-ta, Pi-b, Pi-2" value="">
+          </div>
+
+          <div class="field">
+            <label>
+              <span>Marker–gene distance, cM <span class="tip" tabindex="0" data-tip="How far the screening marker sits from each target gene. 0 = the marker is the gene (perfect marker). With a distance, founders carry marker and gene together, recombination separates them over the generations, MAS still selects on the marker, and the report shows the pyramid by gene and by marker, plus the plants that pass marker screening without the full gene set.">?</span></span>
+              <span>0 = perfect marker</span>
+            </label>
+            <input id="marker_distance_cm" type="number" min="0" max="50" step="0.5" value="0">
           </div>
 
           <div class="field">

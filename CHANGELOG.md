@@ -7,6 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-10-21
+
+### Added — linked markers (the marker is not the gene)
+
+Marker-assisted selection screens with markers some cM away from the
+gene; v0.8.11 treated the gene column as the gene itself.
+
+- `marker_distance_cm` puts each target gene that many cM from the marker
+  it is selected on, as an extra locus on the marker's chromosome,
+  inherited with the chromosome's crossovers (Haldane). Founders carry
+  marker and gene in coupling; recombination separates them. Works for
+  diploids and tetraploids.
+- MAS keeps selecting on the markers. The report counts the genes:
+  `pyramid_complete` (by gene), `pyramid_by_marker`, and
+  `pyramid_marker_only`, the plants that pass marker screening without
+  the full gene set.
+- Rice preset at 3 cM: markers are fixed by generation 4, but at the end
+  48 % of plants carry all three genes and 52 % carry every marker
+  without every gene. Once the markers are fixed, selection no longer
+  sees the genes and recombinant haplotypes drift.
+- Background QTL under a climate scenario are never placed on target or
+  gene loci.
+
+### Added — per-locus statistics in the upload summary
+
+For each SSR locus: alleles, Nei's He, observed heterozygosity, PIC
+(Botstein 1980) and missing calls, as marker labs report them. A
+homozygous call counts two copies of its allele; a tetraploid cell with
+fewer labels than homologues shares the copies among them.
+
+### Added — founder set from a collection
+
+`POST /api/founder-set {"upload": id, "size": n}` picks the n accessions
+of an uploaded table that keep the most alleles (greedy maximum coverage,
+within 1 − 1/e of the optimum), with the coverage curve, the smallest
+greedy set holding every allele, He of the set, and the mean of random
+sets of the same size. In the demo it sits under the upload summary.
+On the 200 × 12 SSR sorghum collection: 20 accessions keep 167 of 230
+alleles (random 20: 111); 56 hold all 230.
+
+### Changed
+
+- Diversity (He) on SSR data is now over the SSR loci only; gene columns
+  and linked gene loci are selection targets, not background. Reported He
+  on tables with gene columns rises slightly against v0.8.11.
+- The upload panel text still said tetraploid profiles are rejected; it
+  now lists the v0.8.11 formats.
+- Pyramiding of real gene columns works for tetraploid tables; the
+  v0.8.11 notes said diploid-only.
+
 ## [0.8.11] - 2026-10-21
 
 ### Fixed — SSR collection tables that were misread without an error

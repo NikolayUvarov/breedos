@@ -29,6 +29,7 @@ import (
 )
 
 const (
+	maxMarkerDistanceCM = 50.0 // linked marker: beyond this the marker says little about the gene
 	pyramidTargetWeight = 10.0 // target alleles dominate the MAS score; phenotype breaks ties
 	maxPyramidGenes     = 8
 	pyramidDonorShare   = 0.02 // founders carrying each synthetic gene
@@ -71,6 +72,41 @@ func pyramidStatus(pop []organism, targets []int) (complete, carriers float64, f
 		freq[k] = round4(freq[k] / (float64(ploidy) * n))
 	}
 	return round4(float64(nComplete) / n), round4(float64(nCarriers) / n), freq
+}
+
+// haldaneR is the recombination fraction at d cM, r = (1 − e^(−2d)) / 2.
+func haldaneR(cM float64) float64 { return (1 - math.Exp(-2*cM/100)) / 2 }
+
+// markerPyramidStatus is the share of individuals homozygous for every
+// marker allele, and the share homozygous for every marker but not for
+// every gene: recombinants that marker screening would select.
+func markerPyramidStatus(pop []organism, markers, genes []int) (byMarker, markerOnly float64) {
+	if len(markers) == 0 || len(pop) == 0 {
+		return 0, 0
+	}
+	ploidy := ploidyOf(pop)
+	var nMarker, nOnly int
+	for i := range pop {
+		hom := true
+		for _, t := range markers {
+			if int(pop[i].geno[t]) != ploidy {
+				hom = false
+				break
+			}
+		}
+		if !hom {
+			continue
+		}
+		nMarker++
+		for _, g := range genes {
+			if int(pop[i].geno[g]) != ploidy {
+				nOnly++
+				break
+			}
+		}
+	}
+	n := float64(len(pop))
+	return round4(float64(nMarker) / n), round4(float64(nOnly) / n)
 }
 
 // targetWeights weights each target gene by 1/√p of its current
@@ -228,7 +264,7 @@ func pyramidPlanningLine(k int, req SimRequest) string {
 
 // pyramidSummaryLine compares the MAS strategy with the best strategy
 // that does not use the markers.
-func pyramidSummaryLine(results []StrategyResult, names []string, cycleYears float64) string {
+func pyramidSummaryLine(results []StrategyResult, names []string, cycleYears, linkedCM float64) string {
 	var mas *StrategyResult
 	best := -1
 	minLost, maxLost := len(names), 0
@@ -276,6 +312,9 @@ func pyramidSummaryLine(results []StrategyResult, names []string, cycleYears flo
 		} else {
 			out += fmt.Sprintf(" Without markers the best is %s with %.0f%% full pyramids; strategies lose %s of the %d genes, because the genes do not raise the selected trait.", b.Name, 100*b.Final.PyramidComplete, lost, len(names))
 		}
+	}
+	if linkedCM > 0 {
+		out += fmt.Sprintf(" The markers are %.1f cM from their genes (r = %.3f per meiosis): at the end %.0f%% of MAS plants are homozygous for all markers, %.0f%% for all genes, and %.0f%% carry every marker without every gene — recombinants that marker screening selects and cannot see.", linkedCM, haldaneR(linkedCM), 100*mas.Final.PyramidByMarker, 100*mas.Final.PyramidComplete, 100*mas.Final.PyramidMarkerOnly)
 	}
 	for i := range results {
 		if r := results[i]; r.Code == "mas_ocs" {

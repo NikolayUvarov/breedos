@@ -63,7 +63,7 @@ type gxeModel struct {
 
 // buildGxE returns nil when the scenario carries no stress (normal mode or
 // zero loss and no rg override).
-func buildGxE(effectsN []float64, sc *ClimateScenario, rng *rand.Rand) *gxeModel {
+func buildGxE(effectsN []float64, sc *ClimateScenario, rng *rand.Rand, protect ...int) *gxeModel {
 	if sc == nil || sc.Mode == "" || sc.Mode == "normal" {
 		return nil
 	}
@@ -81,11 +81,15 @@ func buildGxE(effectsN []float64, sc *ClimateScenario, rng *rand.Rand) *gxeModel
 	}
 	m := len(effectsN)
 	g := &gxeModel{frequency: f, loss: loss, rg: rg, stress: make([]float64, m), target: make([]float64, m), stressOnly: make([]bool, m), normalOnly: make([]bool, m)}
+	protected := make(map[int]bool, len(protect))
+	for _, i := range protect {
+		protected[i] = true
+	}
 	var qtl, free []int
 	for i, e := range effectsN {
 		if e != 0 {
 			qtl = append(qtl, i)
-		} else {
+		} else if !protected[i] {
 			free = append(free, i)
 		}
 	}

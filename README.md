@@ -158,7 +158,7 @@ Minimal request (omitted fields take defaults):
 - time axis: `cycle_years` (0 = off), `genomic_cycle_years` (default `cycle_years`).
 - OCS: `target_delta_f` (default 0.01);
 - ploidy: `ploidy` (2 or 4; 0 = from the data, diploid for synthetic runs);
-- gene pyramiding: `pyramid_genes` (1–8 synthetic target genes) or `target_loci` (column names of an uploaded table).
+- gene pyramiding: `pyramid_genes` (1–8 synthetic target genes) or `target_loci` (column names of an uploaded table), `marker_distance_cm` (0 = the marker is the gene).
 
 Request and response shapes live in the handler types at the top of `mvp/main.go`.
 
@@ -173,7 +173,9 @@ Two-column headers may also be `LOCUS_allele 1` / `LOCUS_allele 2`, and diploid 
 
 `0`, `000000`, `999`, `-9`, `NA`, `-` and `?` mean missing; missing calls are drawn from the locus allele frequencies and counted in the summary. Fragment sizes are rounded to whole base pairs.
 
-Each allele becomes an indicator marker, and the indicators of a locus sit at one map position, so a locus is always inherited as a unit. Reports add Nei's expected heterozygosity per locus and `alleles_retained`, the number of SSR alleles each strategy keeps.
+Each allele becomes an indicator marker, and the indicators of a locus sit at one map position, so a locus is always inherited as a unit. Reports add Nei's expected heterozygosity per locus and `alleles_retained`, the number of SSR alleles each strategy keeps. The upload summary lists every locus with its alleles, He, observed heterozygosity, PIC and missing calls.
+
+**Founder set.** `POST /api/founder-set {"upload": "<id>", "size": 20}` returns the accessions of an uploaded table that keep the most alleles (greedy maximum coverage), the coverage curve, the smallest greedy set holding every allele, He of the set, and what random sets of that size keep on average.
 
 SSR alleles are not CRISPR edit targets.
 
@@ -181,7 +183,7 @@ SSR alleles are not CRISPR edit targets.
 - Each individual carries four homologues. In meiosis they pair at random into two bivalents, cross over within each bivalent, and every gamete takes one chromatid from each, so a duplex parent gives nulliplex : simplex : duplex gametes in 1 : 4 : 1. Double reduction is not modelled.
 - Dosage tables use 0–4. A tetraploid SSR profile (`152/158/164`) does not show allele dosage; the missing copies are drawn among the alleles observed in that cell and counted as imputed.
 - Inbreeding, coancestry and Ne account for 4N gene copies: Ne = 1/(4ΔF).
-- Line breeding (SSD/DH), multi-trait indices and pyramiding of real gene columns are diploid-only for now; synthetic pyramids work in both.
+- Line breeding (SSD/DH) and multi-trait indices are diploid-only for now; pyramiding works in both.
 
 **Gene pyramiding (marker-assisted selection).** Name the target genes — `target_loci: ["Pi1","Pi2","Pi33"]` for columns of an uploaded table (in an SSR table, biallelic `gene:Pi1` columns with 0/1/2 or `+`/`-`) — or ask for `pyramid_genes: K` synthetic genes, each carried homozygously by its own 2 % of founders and without effect on the selected trait.
 - Two strategies are added:
@@ -191,6 +193,7 @@ SSR alleles are not CRISPR edit targets.
 - Per generation the report gives the share of plants homozygous for every target (complete pyramid), carriers of every target, and each target's frequency. Per strategy it gives the generations to 50 % and 90 % complete pyramids, the number of targets lost, and `probability_target_loss`, the share of replicates that lost at least one target.
 - Naming targets adds the constraint "complete pyramid ≥ 90 % of plants", so the best feasible strategy is one that assembles it. The complete-pyramid share is also a Pareto objective.
 - A planning line gives the textbook population sizes for unlinked genes: (1/4)^K of an F2 and (1/2)^K of inbred lines carry all K genes homozygously; ln 0.05 / ln(1−p) plants find one with 95 % probability.
+- `marker_distance_cm` makes the marker imperfect: each gene becomes a locus that many cM from its marker (Haldane), in coupling in the founders. MAS selects on the markers; the report gives `pyramid_complete` by gene, `pyramid_by_marker`, and `pyramid_marker_only` — plants that pass marker screening without the full gene set.
 - The genes have no pathogen behind them: race shifts and durability of resistance are not modelled.
 
 When an upload also carries a phenotype CSV (`id,trait`) for at least 20 of the genotyped lines, the trait architecture comes from your data:
@@ -220,7 +223,8 @@ breedos/
     ├── edit_classifier.go, ngt_classify.go   edit / cross / wait, EU NGT classification
     ├── dataset.go, upload.go, datasets_api.go  founder data loading
     ├── ssr.go            multi-allelic (SSR) and tetraploid genotype parsing
-    ├── pyramid.go        gene pyramiding targets, MAS scoring, pyramid report
+    ├── pyramid.go        gene pyramiding targets, MAS scoring, linked markers, pyramid report
+    ├── founders.go       founder set (maximum allele coverage) from an uploaded table
     ├── effects.go, ocs.go, gxe.go   rrBLUP effects, optimum contributions, climate G×E
     ├── promptbio/        separate experimental substrate; not used by the breeding engine
     └── static/           frontend (vanilla JS, no framework)

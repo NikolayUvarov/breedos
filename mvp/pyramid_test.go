@@ -1,6 +1,8 @@
 package main
 
 import (
+	"math"
+	"math/rand"
 	"strings"
 	"testing"
 )
@@ -103,5 +105,84 @@ func TestPyramidTargetsFromGeneColumns(t *testing.T) {
 	}
 	if _, err := runSimulation(SimRequest{Seed: 4, Upload: id, PopulationSize: 40, Generations: 3, SelectionPercent: 25, Heritability: 0.5, Replicates: 1, TargetLoci: []string{"Pi-9"}}); err == nil || !strings.Contains(err.Error(), "Pi-ta") {
 		t.Fatalf("unknown target should list the gene columns, got %v", err)
+	}
+}
+
+// v0.8.12 — linked markers.
+
+// A linked locus 50 cM from its marker recombines with Haldane
+// r = (1 − e^−1)/2 ≈ 0.316 per meiosis, in diploids and tetraploids.
+func TestLinkedLocusRecombination(t *testing.T) {
+	const gametes = 20000
+	for _, ploidy := range []int{2, 4} {
+		gm := buildSyntheticGenomeMap(100, 1, 1.0)
+		gm.ploidyN = ploidy
+		genes := gm.addLinkedLoci([]int{20}, []string{"R1"}, 50)
+		if gm.markers != 101 || genes[0] != 100 || gm.posM[100] != gm.posM[20]+0.5 {
+			t.Fatalf("ploidy %d: linked locus placed wrongly: markers %d genes %v pos %v", ploidy, gm.markers, genes, gm.posM[100])
+		}
+		parent := newOrganismPloidy(100, 0, ploidy)
+		parent.setAllele(20, 0, 1) // marker and gene on homologue 0 only
+		pop := []organism{parent}
+		extendLinked(pop, []int{20}, genes, 101)
+		parent = pop[0]
+		if parent.geno[100] != 1 || parent.allele(100, 0) != 1 {
+			t.Fatalf("ploidy %d: gene not in coupling with the marker: %+v", ploidy, parent.geno[98:])
+		}
+		rng := rand.New(rand.NewSource(3))
+		xo := make([]float64, 0, 8)
+		recombinant := 0
+		for i := 0; i < gametes; i++ {
+			child := newOrganismPloidy(101, 0, ploidy)
+			if ploidy == 2 {
+				gm.transmit(&parent, &child, 0, 0, rng, xo)
+			} else {
+				gm.transmitPolyploid(&parent, &child, 0, 0, rng, xo)
+			}
+			if child.geno[20] != child.geno[100] {
+				recombinant++
+			}
+		}
+		r := float64(recombinant) / gametes
+		if math.Abs(r-haldaneR(50)) > 0.015 {
+			t.Fatalf("ploidy %d: recombination fraction %.3f, want %.3f", ploidy, r, haldaneR(50))
+		}
+	}
+}
+
+// With markers 20 cM from the genes, marker screening selects plants that
+// lack a gene; the pyramid by marker runs ahead of the pyramid by gene.
+func TestLinkedMarkerPyramidReportsRecombinants(t *testing.T) {
+	base := SimRequest{Seed: 11, PopulationSize: 200, Markers: 600, QTLCount: 40, Generations: 10, SelectionPercent: 15, Heritability: 0.4, StrategySet: "core", Replicates: 2, PyramidGenes: 2}
+	perfect, err := runSimulation(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := findByCode(perfect.Strategies, "mas_pyramid"); p.Final.PyramidByMarker != 0 || perfect.Request.Markers != 600 {
+		t.Fatalf("without a distance the marker is the gene: %+v markers %d", p.Final, perfect.Request.Markers)
+	}
+	base.MarkerDistanceCM = 20
+	linked, err := runSimulation(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mas := findByCode(linked.Strategies, "mas_pyramid")
+	if linked.Request.Markers != 602 {
+		t.Fatalf("two linked gene loci expected, markers %d", linked.Request.Markers)
+	}
+	if mas.Final.PyramidByMarker <= mas.Final.PyramidComplete || mas.Final.PyramidMarkerOnly <= 0 {
+		t.Fatalf("marker screening should out-run the genes: by marker %.2f, by gene %.2f, marker only %.2f", mas.Final.PyramidByMarker, mas.Final.PyramidComplete, mas.Final.PyramidMarkerOnly)
+	}
+	found := false
+	for _, l := range linked.Decision.Interpretation {
+		if strings.Contains(l, "20.0 cM") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("interpretation should state the marker distance: %v", linked.Decision.Interpretation)
+	}
+	if _, err := runSimulation(SimRequest{Seed: 1, PopulationSize: 50, Markers: 100, QTLCount: 10, Generations: 2, SelectionPercent: 20, Heritability: 0.4, StrategySet: "core", Replicates: 1, MarkerDistanceCM: 5}); err == nil {
+		t.Fatal("marker_distance_cm without targets must be rejected")
 	}
 }

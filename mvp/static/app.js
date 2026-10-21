@@ -97,6 +97,7 @@ function requestFromForm() {
     ploidy: (dsVal === 'synthetic' || !dsVal) ? (Math.trunc(numberValue('ploidy')) || 2) : 0,
     pyramid_genes: Math.trunc(numberValue('pyramid_genes')),
     target_loci: String((byId('target_loci') && byId('target_loci').value) || '').split(',').map(x => x.trim()).filter(Boolean),
+    marker_distance_cm: numberValue('marker_distance_cm'),
     selection_percent: numberValue('selection_percent'),
     heritability: numberValue('heritability'),
     mutation_rate: numberValue('mutation_rate'),
@@ -267,6 +268,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260505,
     population_size: 8,
     markers: 180,
@@ -292,6 +294,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260505,
     population_size: 400,
     markers: 900,
@@ -317,6 +320,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260505,
     population_size: 2500,
     markers: 800,
@@ -348,6 +352,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 3,
     target_loci: [],
+    marker_distance_cm: 0,
     ssd_generations: 4,
     seed: 20261022,
     population_size: 300,
@@ -375,6 +380,7 @@ const presets = {
     ploidy: 4,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20261023,
     population_size: 200,
     markers: 900,
@@ -400,6 +406,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     ssd_generations: 4,
     seed: 20261021,
     population_size: 300,
@@ -426,6 +433,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20261020,
     population_size: 300,
     markers: 1500,
@@ -451,6 +459,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260505,
     population_size: 240,
     markers: 700,
@@ -482,6 +491,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260601,
     population_size: 800,
     markers: 1500,
@@ -512,6 +522,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -549,6 +560,7 @@ const presets = {
     ploidy: 2,
     pyramid_genes: 0,
     target_loci: [],
+    marker_distance_cm: 0,
     seed: 20260601,
     population_size: 200,
     markers: 600,
@@ -1078,7 +1090,7 @@ function renderStrategyTable(strategies, prev) {
         <td>${fmt(s.final.probability_inbreeding_breach)} / ${fmt(s.final.probability_diversity_collapse)} / ${fmt(s.final.probability_rare_useful_loss)}</td>
         <td>${formatInt(s.final.fixed_loci)}</td>
         <td>${formatInt(s.final.effective_parents)}</td>
-        <td>${s.metrics && s.metrics[0] && s.metrics[0].target_freq ? `${(100 * (Number(s.final.pyramid_complete) || 0)).toFixed(0)}%<br><span>${pyramidLossText(s)}${s.final.pyramid_gen90 ? ` · 90% by gen ${s.final.pyramid_gen90}` : ''}</span>` : '—'}</td>
+        <td>${s.metrics && s.metrics[0] && s.metrics[0].target_freq ? `${(100 * (Number(s.final.pyramid_complete) || 0)).toFixed(0)}%${s.final.pyramid_by_marker ? ` <span>(by marker ${(100 * s.final.pyramid_by_marker).toFixed(0)}%)</span>` : ''}<br><span>${pyramidLossText(s)}${s.final.pyramid_gen90 ? ` · 90% by gen ${s.final.pyramid_gen90}` : ''}</span>` : '—'}</td>
         <td>${s.final.pareto_optimal ? 'yes' : 'no'}</td>
         <td>${feasibleCell}</td>
         <td>${delta}</td>
@@ -2197,6 +2209,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // v0.7.31 — Issue 05. Upload UI: show/hide the upload card, handle the
   // multipart POST, render the import summary.
   setupUploadUI();
+  setupFounderSet();
   setStatus('Ready. Press Run simulation to calculate.', '');
 });
 
@@ -2309,6 +2322,13 @@ function renderUploadSummary(summary, id) {
       + (l.ignored_columns && l.ignored_columns.length ? ', description columns ignored: ' + l.ignored_columns.map(esc).join(', ') : '')
       + ' (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>'
       + (l.warnings || []).map(w => '<div style="color: var(--warn); margin-top: 4px">⚠ ' + esc(w) + '</div>').join(''));
+    if (l.per_locus && l.per_locus.length) {
+      // v0.8.12: the per-locus table a marker lab reports (He, Ho, PIC).
+      parts.push('<details style="margin-top:6px"><summary>Per locus: alleles, He, Ho, PIC, missing (' + l.per_locus.length + ' loci)</summary>'
+        + '<div style="max-height:260px; overflow:auto; margin-top:6px"><table class="data-table" style="font-size:12px"><thead><tr><th>Locus</th><th>Alleles</th><th>He</th><th>Ho</th><th>PIC</th><th>Missing</th></tr></thead><tbody>'
+        + l.per_locus.map(x => '<tr><td>' + esc(x.name) + '</td><td>' + x.alleles + '</td><td>' + x.he.toFixed(3) + '</td><td>' + x.ho.toFixed(3) + '</td><td>' + x.pic.toFixed(3) + '</td><td>' + x.missing + '</td></tr>').join('')
+        + '</tbody></table></div></details>');
+    }
   } else if (summary.genotype) {
     parts.push('<div><strong>Genotype</strong>: ' + summary.genotype.individuals + ' individuals × ' + summary.genotype.markers + ' markers' + (summary.genotype.ploidy === 4 ? ', tetraploid dosages 0–4' : '') + ' (sample ids: ' + summary.genotype.sample_ids.map(esc).join(', ') + ')</div>');
   }
@@ -2332,4 +2352,41 @@ function renderUploadSummary(summary, id) {
   }
   el.innerHTML = parts.join('');
   el.hidden = false;
+  const fs = byId('founderSetBox');
+  if (fs) {
+    fs.hidden = !(summary.genotype && id);
+    const out = byId('founderSetOut');
+    if (out) out.innerHTML = '';
+    const sz = byId('founderSetSize');
+    if (sz && summary.genotype) sz.max = String(summary.genotype.individuals);
+  }
+}
+
+// v0.8.12. Founder set: the accessions that keep the most alleles.
+function setupFounderSet() {
+  const btn = byId('founderSetBtn');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    const out = byId('founderSetOut');
+    if (!uploadState.id || !out) return;
+    const size = Math.max(1, Math.trunc(numberValue('founderSetSize')) || 20);
+    btn.disabled = true;
+    out.textContent = 'computing…';
+    try {
+      const res = await fetch('/api/founder-set', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({upload: uploadState.id, size})});
+      if (!res.ok) throw new Error((await res.text()) || ('HTTP ' + res.status));
+      const d = await res.json();
+      const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+      const curve = d.curve.map((c, k) => (k + 1) + ':' + c).filter((_, k) => k < 5 || (k + 1) % 5 === 0 || k === d.curve.length - 1).join(' · ');
+      out.innerHTML = '<div><strong>' + d.size + ' of ' + d.individuals + ' accessions keep ' + d.alleles_kept + ' of ' + d.alleles_total + ' alleles</strong> (random ' + d.size + ': ' + d.random_alleles.toFixed(0) + ' on average); He ' + d.he_subset.toFixed(3) + ' in the set vs ' + d.he_all.toFixed(3) + ' in the whole table'
+        + (d.all_for_kept ? '; every allele is held by the first ' + d.all_for_kept + ' picks' : '') + '.</div>'
+        + '<div style="margin-top:4px"><strong>In pick order:</strong> ' + d.ids.map(esc).join(', ') + '</div>'
+        + '<div style="margin-top:4px; color:var(--muted)">Alleles kept by the first k picks — ' + esc(curve) + '</div>'
+        + '<div style="margin-top:4px; color:var(--muted)">' + esc(d.note) + '</div>';
+    } catch (e) {
+      out.innerHTML = '<span style="color:var(--danger)">founder set failed: ' + String(e.message).replace(/[&<>]/g, '') + '</span>';
+    } finally {
+      btn.disabled = false;
+    }
+  });
 }

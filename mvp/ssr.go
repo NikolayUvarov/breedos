@@ -54,6 +54,12 @@ func (l *locusLayout) loci() int { return len(l.names) }
 func (l *locusLayout) markers() int { return len(l.locusOf) }
 
 // isIndicator reports whether marker m belongs to a multi-allelic locus.
+// clone copies a layout so a run can extend it without touching the
+// dataset's.
+func (l *locusLayout) clone() *locusLayout {
+	return &locusLayout{names: append([]string(nil), l.names...), start: append([]int(nil), l.start...), alleles: append([][]string(nil), l.alleles...), locusOf: append([]int(nil), l.locusOf...)}
+}
+
 func (l *locusLayout) isIndicator(m int) bool {
 	return l != nil && m < len(l.locusOf) && len(l.alleles[l.locusOf[m]]) > 1
 }
@@ -79,6 +85,49 @@ type ssrInfo struct {
 	// loci, and warnings about a layout that may have been misread.
 	IgnoredColumns []string `json:"ignored_columns,omitempty"`
 	Warnings       []string `json:"warnings,omitempty"`
+	// v0.8.12. Per-locus summary as marker labs report it.
+	PerLocus []locusStats `json:"per_locus,omitempty"`
+}
+
+// locusStats is one SSR locus of the upload summary: allele count, Nei's
+// expected heterozygosity, observed heterozygosity (share of called
+// individuals with more than one allele), Botstein's PIC, missing calls.
+// Frequencies are of observed alleles (for tetraploids, without dosage).
+type locusStats struct {
+	Name    string  `json:"name"`
+	Alleles int     `json:"alleles"`
+	He      float64 `json:"he"`
+	Ho      float64 `json:"ho"`
+	PIC     float64 `json:"pic"`
+	Missing int     `json:"missing"`
+}
+
+// locusSummary computes He, Ho and PIC from allele counts and the number
+// of heterozygous and called individuals.
+func locusSummary(name string, count map[string]float64, het, called, missing int) locusStats {
+	total := 0.0
+	for _, c := range count {
+		total += c
+	}
+	p := make([]float64, 0, len(count))
+	for _, c := range count {
+		p = append(p, c/total)
+	}
+	sumSq := 0.0
+	for _, x := range p {
+		sumSq += x * x
+	}
+	pic := 1 - sumSq
+	for i := range p {
+		for j := i + 1; j < len(p); j++ {
+			pic -= 2 * p[i] * p[i] * p[j] * p[j]
+		}
+	}
+	ho := 0.0
+	if called > 0 {
+		ho = float64(het) / float64(called)
+	}
+	return locusStats{Name: name, Alleles: len(count), He: round4(1 - sumSq), Ho: round4(ho), PIC: round4(pic), Missing: missing}
 }
 
 // Missing calls: empty, 0 / 000 / 000000, NA, -9 (STRUCTURE), 999 (a common
@@ -506,11 +555,28 @@ func parseMultiallelicCSVPloidy(raw []byte, sourceFile string, ploidy int) (*loa
 			keep = append(keep, kept{col: k, gene: true, mean: mean})
 			continue
 		}
-		count := map[string]int{}
+		// Allele copies per label: a homozygous call ("152") is ploidy
+		// copies; a tetraploid cell with fewer labels than homologues
+		// shares the copies among them (dosage unknown).
+		count := map[string]float64{}
+		locusHet, locusCalled, locusMissing := 0, 0, 0
 		for _, r := range rows {
-			for _, a := range r.calls[k] {
-				count[a]++
+			if r.calls[k] == nil {
+				locusMissing++
+				continue
 			}
+			locusCalled++
+			distinct := map[string]bool{}
+			for _, a := range r.calls[k] {
+				count[a] += float64(ploidy) / float64(len(r.calls[k]))
+				distinct[a] = true
+			}
+			if len(distinct) > 1 {
+				locusHet++
+			}
+		}
+		if len(count) >= 2 {
+			info.PerLocus = append(info.PerLocus, locusSummary(col.name, count, locusHet, locusCalled, locusMissing))
 		}
 		if len(count) < 2 {
 			if len(count) == 1 {
@@ -527,7 +593,7 @@ func parseMultiallelicCSVPloidy(raw []byte, sourceFile string, ploidy int) (*loa
 		weights := make([]float64, len(labels))
 		for i, a := range labels {
 			index[a] = i
-			weights[i] = float64(count[a])
+			weights[i] = count[a]
 			markerNames = append(markerNames, col.name+":"+a)
 		}
 		layout.names = append(layout.names, col.name)
@@ -727,21 +793,26 @@ func diversityOf(freq []float64, l *locusLayout) float64 {
 	if l == nil {
 		return diversityFromFreq(freq)
 	}
+	// v0.8.12: over the SSR loci only — gene columns and linked gene loci
+	// are targets of selection, not a measure of the background.
 	var sum float64
+	n := 0
 	for li, labels := range l.alleles {
-		s := l.start[li]
 		if len(labels) <= 1 {
-			p := freq[s]
-			sum += 2 * p * (1 - p)
 			continue
 		}
+		s := l.start[li]
 		h := 1.0
 		for a := range labels {
 			h -= freq[s+a] * freq[s+a]
 		}
 		sum += h
+		n++
 	}
-	return sum / float64(l.loci())
+	if n == 0 {
+		return diversityFromFreq(freq)
+	}
+	return sum / float64(n)
 }
 
 // allelesPresent counts alleles still segregating or fixed on

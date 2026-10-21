@@ -128,8 +128,11 @@ type SimRequest struct {
 	// v0.8.11. Gene pyramiding (pyramid.go): TargetLoci names gene columns
 	// of the genotype table; PyramidGenes adds that many synthetic target
 	// genes, each in its own donor founders (synthetic populations only).
-	TargetLoci   []string `json:"target_loci,omitempty"`
-	PyramidGenes int      `json:"pyramid_genes,omitempty"`
+	TargetLoci []string `json:"target_loci,omitempty"`
+	// v0.8.12. Distance in cM between each target gene and the marker it
+	// is selected on; 0 = the marker is the gene.
+	MarkerDistanceCM float64 `json:"marker_distance_cm"`
+	PyramidGenes     int     `json:"pyramid_genes,omitempty"`
 	// v0.8.11. Ploidy: 2 (default) or 4 (autotetraploid, e.g. potato).
 	// Uploaded data carries its own ploidy; this field sets it for
 	// synthetic populations and must agree with the data otherwise.
@@ -260,9 +263,13 @@ type MetricPoint struct {
 	AllelesRetained int `json:"alleles_retained,omitempty"`
 	// v0.8.11. Gene pyramiding: share homozygous for every target gene,
 	// share carrying every target gene, and each target's frequency.
-	PyramidComplete float64   `json:"pyramid_complete,omitempty"`
-	PyramidCarriers float64   `json:"pyramid_carriers,omitempty"`
-	TargetFreq      []float64 `json:"target_freq,omitempty"`
+	PyramidComplete float64 `json:"pyramid_complete,omitempty"`
+	// v0.8.12. With a linked marker: homozygous for every marker, and
+	// for every marker but not every gene.
+	PyramidByMarker   float64   `json:"pyramid_by_marker,omitempty"`
+	PyramidMarkerOnly float64   `json:"pyramid_marker_only,omitempty"`
+	PyramidCarriers   float64   `json:"pyramid_carriers,omitempty"`
+	TargetFreq        []float64 `json:"target_freq,omitempty"`
 }
 
 type FinalStats struct {
@@ -314,6 +321,10 @@ type FinalStats struct {
 	// Share of replicates that lost at least one target gene; the mean
 	// frequency hides a gene lost in one replicate.
 	ProbabilityTargetLoss float64 `json:"probability_target_loss,omitempty"`
+	// v0.8.12. Linked marker: pyramid complete by marker, and marker
+	// carriers lacking a gene.
+	PyramidByMarker   float64 `json:"pyramid_by_marker,omitempty"`
+	PyramidMarkerOnly float64 `json:"pyramid_marker_only,omitempty"`
 }
 
 type EditCandidate struct {
@@ -352,6 +363,9 @@ type runModel struct {
 	ssdGenerations int
 	// v0.8.11. Pyramiding target markers.
 	targets []int
+	// v0.8.12. The genes behind the markers when they are linked loci
+	// (nil = the marker is the gene).
+	genes []int
 }
 
 func newRunModel(req SimRequest, gm *genomeMap, founders []organism, effects []float64) runModel {
@@ -551,6 +565,7 @@ func main() {
 	}
 	// v0.7.26 — Issue 05. Minimal upload workflow.
 	mux.HandleFunc("/api/upload", uploadHandler)
+	mux.HandleFunc("/api/founder-set", founderSetHandler) // v0.8.12
 	// v0.7.26 — Issue 05. Static fixture files for the example links on
 	// the demo upload form. Embedded; only the four toy CSVs are served.
 	mux.HandleFunc("/upload-fixture/", uploadFixtureHandler)
@@ -983,13 +998,24 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 	if lineBreeding(req) {
 		inbredFounders = homozygousFounders(initial, gm, 0.05, rand.New(rand.NewSource(req.Seed+founderPhaseSeedOffset+1)))
 	}
+	// v0.8.12. A marker some cM from its gene: the gene becomes a linked
+	// locus, in coupling with the marker in the founders; MAS keeps
+	// selecting on the marker, the pyramid is reported by gene.
+	var genes []int
+	if len(targets) > 0 && req.MarkerDistanceCM > 0 {
+		genes = gm.addLinkedLoci(targets, targetNames, req.MarkerDistanceCM)
+		extendLinked(initial, targets, genes, gm.markers)
+		req.Markers = gm.markers
+		effects = append(effects, make([]float64, len(genes))...)
+	}
 	model := newRunModel(req, gm, initial, effects)
 	model.targets = targets
+	model.genes = genes
 	// v0.8.7 — Issue 38. Under a climate scenario, selection uses the
 	// normal-season effects while every metric is on the target mix of
 	// seasons (gxe.go).
 	metricEffects := effects
-	gxe := buildGxE(effects, req.Climate, rand.New(rand.NewSource(req.Seed+gxeSeedOffset)))
+	gxe := buildGxE(effects, req.Climate, rand.New(rand.NewSource(req.Seed+gxeSeedOffset)), append(append([]int(nil), targets...), genes...)...)
 	if gxe != nil {
 		metricEffects = gxe.target
 		_, vgT := meanVar(geneticValues(initial, gxe.target))
@@ -1067,7 +1093,13 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		if effectEstimate != nil {
 			source = "Trait effects are estimated from your phenotypes on the SSR alleles."
 		}
-		notes = append(notes, fmt.Sprintf("Multi-allelic markers (%s): %s SSR loci used, %d alleles (%d–%d per locus in the file). Each allele is an indicator marker inherited as a unit with its locus. Diversity is Nei's expected heterozygosity per locus; alleles_retained counts alleles still present.%s %s", info.Format, used, gm.markers, info.MinAlleles, info.MaxAlleles, imputed, source))
+		indicators := 0
+		for m := 0; m < gm.markers; m++ {
+			if gm.layout.isIndicator(m) {
+				indicators++
+			}
+		}
+		notes = append(notes, fmt.Sprintf("Multi-allelic markers (%s): %s SSR loci used, %d alleles (%d–%d per locus in the file). Each allele is an indicator marker inherited as a unit with its locus. Diversity is Nei's expected heterozygosity over the SSR loci; alleles_retained counts alleles still present.%s %s", info.Format, used, indicators, info.MinAlleles, info.MaxAlleles, imputed, source))
 	}
 	if ploidy > 2 {
 		notes = append(notes, fmt.Sprintf("Autotetraploid: four homologues per chromosome, dosage 0–4. In meiosis the homologues pair at random into two bivalents and each gamete takes one recombinant chromatid from each (random chromosome segregation; double reduction is not modelled). Heterozygosity decays more slowly than in diploids — 4N gene copies per generation instead of 2N."))
@@ -1078,6 +1110,9 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 			src = fmt.Sprintf("synthetic genes, each carried homozygously by its own %.0f%% of founders", 100*pyramidDonorShare)
 		}
 		notes = append(notes, fmt.Sprintf("Gene pyramiding: %d target genes (%s) — %s. Target genes do not act on the selected trait; MAS ranks candidates by target alleles first, then by phenotype. pyramid_complete is the share of individuals homozygous for every target.", len(targets), strings.Join(targetNames, ", "), src))
+		if len(genes) > 0 {
+			notes = append(notes, fmt.Sprintf("Linked markers: each gene sits %.1f cM from the marker it is selected on (Haldane r = %.3f per meiosis). Founders carry marker and gene in coupling; recombination separates them. MAS sees the markers only; pyramid_complete counts the genes, pyramid_by_marker the markers, pyramid_marker_only the plants that pass marker screening without the full gene set.", req.MarkerDistanceCM, haldaneR(req.MarkerDistanceCM)))
+		}
 	}
 	if lineBreeding(req) {
 		how := "one doubled-haploid step (fully homozygous lines)"
@@ -1104,7 +1139,7 @@ func runSimulationWithCallbacks(req SimRequest, progress progressFunc, snapshot 
 		decision.Interpretation = append(decision.Interpretation, alleleRetentionLine(results))
 	}
 	if len(targets) > 0 {
-		if line := pyramidSummaryLine(results, targetNames, req.CycleYears); line != "" {
+		if line := pyramidSummaryLine(results, targetNames, req.CycleYears, req.MarkerDistanceCM); line != "" {
 			decision.Interpretation = append(decision.Interpretation, line)
 		}
 		decision.Interpretation = append(decision.Interpretation, pyramidPlanningLine(len(targets), req))
@@ -1582,13 +1617,15 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	metricCount := len(reps[0].Metrics)
 	metrics := make([]MetricPoint, metricCount)
 	for genIdx := 0; genIdx < metricCount; genIdx++ {
-		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles, pyrComplete, pyrCarriers float64
+		var trait, gain, gainSigma, diversity, inbreeding, drift, lost, fixed, favFixed, unfavFixed, parents, alleles, pyrComplete, pyrCarriers, pyrMarker, pyrOnly float64
 		var targetFreq []float64
 		for _, rep := range reps {
 			p := rep.Metrics[genIdx]
 			alleles += float64(p.AllelesRetained)
 			pyrComplete += p.PyramidComplete
 			pyrCarriers += p.PyramidCarriers
+			pyrMarker += p.PyramidByMarker
+			pyrOnly += p.PyramidMarkerOnly
 			if p.TargetFreq != nil {
 				if targetFreq == nil {
 					targetFreq = make([]float64, len(p.TargetFreq))
@@ -1613,7 +1650,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 		for k := range targetFreq {
 			targetFreq[k] = round4(targetFreq[k] / den)
 		}
-		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), PyramidComplete: round4(pyrComplete / den), PyramidCarriers: round4(pyrCarriers / den), TargetFreq: targetFreq, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
+		metrics[genIdx] = MetricPoint{Generation: reps[0].Metrics[genIdx].Generation, Year: reps[0].Metrics[genIdx].Year, AllelesRetained: int(math.Round(alleles / den)), PyramidComplete: round4(pyrComplete / den), PyramidCarriers: round4(pyrCarriers / den), PyramidByMarker: round4(pyrMarker / den), PyramidMarkerOnly: round4(pyrOnly / den), TargetFreq: targetFreq, TraitMean: round4(trait / den), GeneticGain: round4(gain / den), GainSigma: round4(gainSigma / den), Diversity: round4(diversity / den), Inbreeding: round4(inbreeding / den), AlleleDrift: round4(drift / den), RareUsefulLost: int(math.Round(lost / den)), FixedLoci: int(math.Round(fixed / den)), FavorableFixed: int(math.Round(favFixed / den)), UnfavorableFixed: int(math.Round(unfavFixed / den)), EffectiveParents: int(math.Round(parents / den))}
 	}
 	// v0.7.20 — Issue 20. Fill in Ne[t] = 1 / (2 ΔF) over the metrics slice.
 	populateNeTrajectoryPloidy(metrics, req.Ploidy)
@@ -1655,6 +1692,7 @@ func aggregateReplicates(req SimRequest, cfg strategyConfig, reps []StrategyResu
 	final.AllelesAtStart, final.AllelesRetained = metrics[0].AllelesRetained, finalMetric.AllelesRetained
 	if finalMetric.TargetFreq != nil {
 		final.PyramidComplete, final.PyramidCarriers = finalMetric.PyramidComplete, finalMetric.PyramidCarriers
+		final.PyramidByMarker, final.PyramidMarkerOnly = finalMetric.PyramidByMarker, finalMetric.PyramidMarkerOnly
 		final.PyramidGen50, final.PyramidGen90 = pyramidMilestones(metrics)
 		var lostSum, lossEvents int
 		for _, rep := range reps {
@@ -2411,6 +2449,12 @@ func validateRequest(req SimRequest, strategyCount int) error {
 	if len(req.TargetLoci) > maxPyramidGenes {
 		return fmt.Errorf("at most %d target_loci", maxPyramidGenes)
 	}
+	if req.MarkerDistanceCM < 0 || req.MarkerDistanceCM > maxMarkerDistanceCM {
+		return fmt.Errorf("marker_distance_cm must be between 0 (the marker is the gene) and %.0f", maxMarkerDistanceCM)
+	}
+	if req.MarkerDistanceCM > 0 && req.PyramidGenes == 0 && len(req.TargetLoci) == 0 {
+		return errors.New("marker_distance_cm needs target genes: set pyramid_genes or target_loci")
+	}
 	if (req.PyramidGenes > 0 || len(req.TargetLoci) > 0) && len(req.Traits) > 0 {
 		return errors.New("gene pyramiding is available for single-trait runs")
 	}
@@ -2633,7 +2677,7 @@ func clonePopulation(pop []organism) []organism {
 
 func simulateStrategy(req SimRequest, cfg strategyConfig, model runModel, pop []organism, effects, selEffects []float64, baseFreq []float64, baseDiversity, baseMean float64, rareUsefulAtStart []int, rng *rand.Rand, progress func(gen int, pop []organism)) StrategyResult {
 	metrics := make([]MetricPoint, 0, req.Generations+1)
-	mc := metricContext{effects: effects, baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: baseMean, sigmaA0: model.sigmaA0, rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: model.genome.layout, targets: model.targets}
+	mc := metricContext{effects: effects, baseFreq: baseFreq, baseDiversity: baseDiversity, baseMean: baseMean, sigmaA0: model.sigmaA0, rareUsefulAtStart: rareUsefulAtStart, betweenLines: lineBreeding(req), layout: model.genome.layout, targets: model.targets, genes: model.genes}
 	metrics = append(metrics, computeMetrics(0, pop, mc, 0))
 	cycle := cycleYearsFor(req, cfg)
 	for gen := 1; gen <= generationsFor(req, cfg); gen++ {
@@ -2936,6 +2980,7 @@ type metricContext struct {
 	betweenLines      bool         // v0.8.8: coancestry among lines (line breeding)
 	layout            *locusLayout // v0.8.9: multi-allelic loci
 	targets           []int        // v0.8.11: pyramiding target markers
+	genes             []int        // v0.8.12: linked genes behind the markers
 }
 
 func computeMetrics(gen int, pop []organism, c metricContext, effectiveParents int) MetricPoint {
@@ -2951,8 +2996,16 @@ func computeMetrics(gen int, pop []organism, c metricContext, effectiveParents i
 		gainSigma = (trait - baseMean) / sigmaA0
 	}
 	lost := countRareUsefulLost(freq, rareUsefulAtStart)
-	complete, carriers, targetFreq := pyramidStatus(pop, c.targets)
-	return MetricPoint{PyramidComplete: complete, PyramidCarriers: carriers, TargetFreq: targetFreq, Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
+	genes := c.genes
+	if genes == nil {
+		genes = c.targets
+	}
+	complete, carriers, targetFreq := pyramidStatus(pop, genes)
+	var byMarker, markerOnly float64
+	if c.genes != nil {
+		byMarker, markerOnly = markerPyramidStatus(pop, c.targets, c.genes)
+	}
+	return MetricPoint{PyramidComplete: complete, PyramidCarriers: carriers, PyramidByMarker: byMarker, PyramidMarkerOnly: markerOnly, TargetFreq: targetFreq, Generation: gen, AllelesRetained: allelesPresent(freq, layout), TraitMean: round4(trait), GeneticGain: round4(trait - baseMean), GainSigma: round4(gainSigma), Diversity: round4(div), Inbreeding: round4(inbreeding), AlleleDrift: round4(drift), RareUsefulLost: lost, FixedLoci: fixed, FavorableFixed: favorableFixed, UnfavorableFixed: unfavorableFixed, EffectiveParents: effectiveParents}
 }
 func fixationStats(freq []float64, effects []float64) (fixed, favorableFixed, unfavorableFixed int) {
 	for i, p := range freq {
