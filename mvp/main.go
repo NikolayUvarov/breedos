@@ -592,6 +592,8 @@ func main() {
 	// v0.8.14. Private data room: login, table list, download.
 	mux.HandleFunc("/private", privateHandler)
 	mux.HandleFunc("/private/", privateHandler)
+	mux.HandleFunc("/mynotes", privateHandler)
+	mux.HandleFunc("/mynotes/", privateHandler) // v0.8.18
 	mux.HandleFunc("/api/private/datasets", privateDatasetsHandler)
 	// v0.7.26 — Issue 05. Static fixture files for the example links on
 	// the demo upload form. Embedded; only the four toy CSVs are served.

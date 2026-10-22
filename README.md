@@ -206,7 +206,7 @@ Founders can be phenotyped or unphenotyped lines of the same genotype file. Mark
 
 ## Private data room
 
-Tables that may not be published can be shown in person without publishing them. Put CSV files (genotype tables, as for uploads) in `private/data/` next to the binary and users in `private/auth`, one `user:sha256(user:password)` per line (`./breedos -private-hash user:password` prints one; `./set_private_password.sh [password] [user]` writes it to the deployed server, generating a password when none is given). `/private` asks for the login; logged in, it lists the tables, and the demo offers them under Founder population as "Private: <file>" (`dataset: "private:<file>"`), for that browser session only. Without `private/auth` the route answers 404.
+Tables that may not be published can be shown in person without publishing them. Put CSV files (genotype tables, as for uploads) in `private/data/` next to the binary and users in `private/auth`, one `user:sha256(user:password)[:areas]` per line (areas `data` = tables and `/private`, `notes` = `/mynotes/`; default `data`) (`./breedos -private-hash user:password` prints one; `./set_private_password.sh [password] [user]` writes it to the deployed server, generating a password when none is given). `/private` asks for the login; logged in, it lists the tables, and the demo offers them under Founder population as "Private: <file>" (`dataset: "private:<file>"`), for that browser session only. `/mynotes/<file>` serves `private/notes/` (HTML, text, images, PDF) to a login with the `notes` area, listing the files at `/mynotes/`. Without `private/auth` the routes answer 404.
 
 ## Project structure
 

@@ -10,7 +10,9 @@ package main
 //
 // Layout next to the binary:
 //
-//	private/auth    one "user:sha256(user:password)" per line
+//	private/auth    one "user:sha256(user:password)[:areas]" per line;
+//	                areas = comma-separated "data" (tables, /private) and
+//	                "notes" (/mynotes); default data
 //	private/secret  32 random bytes for signing sessions (created on first use)
 //	private/data/   CSV tables (genotype, as for uploads)
 //
@@ -67,23 +69,51 @@ func privateHash(user, password string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+type privateUser struct {
+	hash  string
+	areas map[string]bool
+}
+
+const (
+	areaData  = "data"  // /private, /private/data, private datasets in the demo
+	areaNotes = "notes" // /mynotes
+)
+
 // privateUsers reads private/auth; a missing file means no private area.
-func privateUsers() map[string]string {
+func privateUsers() map[string]privateUser {
 	raw, err := os.ReadFile(filepath.Join(privateDir(), "auth"))
 	if err != nil {
 		return nil
 	}
-	users := map[string]string{}
+	users := map[string]privateUser{}
 	for _, l := range strings.Split(string(raw), "\n") {
 		l = strings.TrimSpace(l)
 		if l == "" || strings.HasPrefix(l, "#") {
 			continue
 		}
-		if u, h, ok := strings.Cut(l, ":"); ok {
-			users[strings.TrimSpace(u)] = strings.ToLower(strings.TrimSpace(h))
+		parts := strings.SplitN(l, ":", 3)
+		if len(parts) < 2 {
+			continue
 		}
+		u := privateUser{hash: strings.ToLower(strings.TrimSpace(parts[1])), areas: map[string]bool{}}
+		areas := areaData
+		if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+			areas = parts[2]
+		}
+		for _, a := range strings.Split(areas, ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				u.areas[a] = true
+			}
+		}
+		users[strings.TrimSpace(parts[0])] = u
 	}
 	return users
+}
+
+// privateAllowed: the session user may use the area.
+func privateAllowed(user, area string) bool {
+	u, ok := privateUsers()[user]
+	return ok && u.areas[area]
 }
 
 // privateSecret loads or creates the session-signing secret.
@@ -209,7 +239,7 @@ func authorizePrivateDataset(r *http.Request, dataset string) error {
 	if !strings.HasPrefix(dataset, privatePrefix) {
 		return nil
 	}
-	if privateSession(r) == "" {
+	if u := privateSession(r); u == "" || !privateAllowed(u, areaData) {
 		return fmt.Errorf("dataset %q is private: log in at /private first", dataset)
 	}
 	if _, ok := privateDatasetFile(dataset); !ok {
@@ -278,10 +308,10 @@ func privateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		u, p := strings.TrimSpace(r.FormValue("user")), r.FormValue("password")
 		want, ok := privateUsers()[u]
-		if !ok || subtle.ConstantTimeCompare([]byte(want), []byte(privateHash(u, p))) != 1 {
+		if !ok || subtle.ConstantTimeCompare([]byte(want.hash), []byte(privateHash(u, p))) != 1 {
 			privateTooManyFails(addr, true)
 			time.Sleep(privateLoginDelay)
-			writePrivateLogin(w, "wrong login or password")
+			writePrivateLogin(w, "wrong login or password", privateNext(r.FormValue("next")))
 			return
 		}
 		if err := privateSetSession(w, r, u); err != nil {
@@ -290,12 +320,12 @@ func privateHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		// No server redirect: the production proxy follows 3xx itself
 		// and drops the Set-Cookie of the redirect response.
-		writePrivateContinue(w, "Logged in.")
+		writePrivateContinue(w, "Logged in.", privateNext(r.FormValue("next")))
 	case r.URL.Path == "/private/logout":
 		http.SetCookie(w, &http.Cookie{Name: privateCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
-		writePrivateContinue(w, "Logged out.")
+		writePrivateContinue(w, "Logged out.", "/private")
 	case strings.HasPrefix(r.URL.Path, "/private/data/"):
-		if user == "" {
+		if user == "" || !privateAllowed(user, areaData) {
 			http.Error(w, "log in at /private first", http.StatusUnauthorized)
 			return
 		}
@@ -309,10 +339,27 @@ func privateHandler(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, path)
 	case r.URL.Path == "/private" || r.URL.Path == "/private/":
 		if user == "" {
-			writePrivateLogin(w, "")
+			writePrivateLogin(w, "", "/private")
+			return
+		}
+		if !privateAllowed(user, areaData) {
+			writePrivateLogin(w, "this login has no access to the data room; log in with another", "/private")
 			return
 		}
 		writePrivateRoom(w, user)
+	case strings.HasPrefix(r.URL.Path, "/mynotes"):
+		// v0.8.18. Private notes: files under private/notes, read in the
+		// browser behind a login with the "notes" area. Unauthenticated:
+		// the login form, which comes back here afterwards.
+		if user == "" {
+			writePrivateLogin(w, "", privateNext(r.URL.RequestURI()))
+			return
+		}
+		if !privateAllowed(user, areaNotes) {
+			writePrivateLogin(w, "this login has no access to the notes; log in with another", privateNext(r.URL.RequestURI()))
+			return
+		}
+		privateNotes(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -320,7 +367,7 @@ func privateHandler(w http.ResponseWriter, r *http.Request) {
 
 // privateDatasetsHandler: GET /api/private/datasets, the list for the demo.
 func privateDatasetsHandler(w http.ResponseWriter, r *http.Request) {
-	if privateSession(r) == "" {
+	if u := privateSession(r); u == "" || !privateAllowed(u, areaData) {
 		http.Error(w, "log in at /private first", http.StatusUnauthorized)
 		return
 	}
@@ -330,22 +377,82 @@ func privateDatasetsHandler(w http.ResponseWriter, r *http.Request) {
 
 const privateStyle = `<style>body{font-family:system-ui,sans-serif;background:#0b1020;color:#e8ecf4;margin:0;padding:32px 16px;line-height:1.5}main{max-width:760px;margin:0 auto}h1{font-weight:600;font-size:22px}a{color:#8fffd1}table{border-collapse:collapse;width:100%;margin:16px 0}td,th{padding:8px 10px;border-bottom:1px solid #2a3350;text-align:left;font-size:14px}input{padding:8px 10px;border-radius:6px;border:1px solid #2a3350;background:#131a30;color:#e8ecf4;font-size:15px}button{padding:8px 16px;border-radius:6px;border:1px solid #8fffd1;background:transparent;color:#8fffd1;font-size:15px;cursor:pointer}.muted{color:#9aa4bd;font-size:13px}.err{color:#ff9a9a}</style>`
 
-func writePrivateLogin(w http.ResponseWriter, msg string) {
+// privateNext keeps a post-login destination on this site: an absolute
+// path without a scheme or host, else /private.
+func privateNext(next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.ContainsAny(next, "\r\n\\") {
+		return "/private"
+	}
+	return next
+}
+
+func writePrivateLogin(w http.ResponseWriter, msg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	errLine := ""
 	if msg != "" {
 		errLine = `<p class="err">` + html.EscapeString(msg) + `</p>`
 	}
-	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BreedOS private</title>%s</head><body><main><h1>Private data room</h1><p class="muted">Tables here are not public and are shown only in person. Log in to continue.</p>%s<form method="post" action="/private/login"><p><input name="user" placeholder="login" autocomplete="username" required></p><p><input name="password" type="password" placeholder="password" autocomplete="current-password" required></p><p><button type="submit">Log in</button></p></form><p class="muted"><a href="/">BreedOS</a></p></main></body></html>`, privateStyle, errLine)
+	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BreedOS private</title>%s</head><body><main><h1>Private data room</h1><p class="muted">Tables here are not public and are shown only in person. Log in to continue.</p>%s<form method="post" action="/private/login"><input type="hidden" name="next" value="%s"><p><input name="user" placeholder="login" autocomplete="username" required></p><p><input name="password" type="password" placeholder="password" autocomplete="current-password" required></p><p><button type="submit">Log in</button></p></form><p class="muted"><a href="/">BreedOS</a></p></main></body></html>`, privateStyle, errLine, html.EscapeString(privateNext(next)))
+}
+
+// privateNotes serves /mynotes/ (a list) and /mynotes/<file> from
+// private/notes next to the binary: .html as pages, .md and .txt as
+// text, images as images. Plain file names only.
+func privateNotes(w http.ResponseWriter, r *http.Request) {
+	dir := filepath.Join(privateDir(), "notes")
+	name := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/mynotes"), "/")
+	w.Header().Set("Cache-Control", "no-store")
+	if name == "" {
+		entries, _ := os.ReadDir(dir)
+		var rows strings.Builder
+		for _, e := range entries {
+			if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+				continue
+			}
+			rows.WriteString(`<li><a href="/mynotes/` + html.EscapeString(e.Name()) + `">` + html.EscapeString(e.Name()) + `</a></li>`)
+		}
+		if rows.Len() == 0 {
+			rows.WriteString(`<li class="muted">no notes in private/notes yet</li>`)
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BreedOS notes</title>%s</head><body><main><h1>Private notes</h1><ul>%s</ul><p class="muted"><a href="/private">Private data room</a> · <a href="/private/logout">log out</a></p></main></body></html>`, privateStyle, rows.String())
+		return
+	}
+	if name != filepath.Base(name) || strings.HasPrefix(name, ".") {
+		http.NotFound(w, r)
+		return
+	}
+	path := filepath.Join(dir, name)
+	if info, err := os.Stat(path); err != nil || info.IsDir() {
+		http.NotFound(w, r)
+		return
+	}
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".html", ".htm":
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	case ".md", ".txt":
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	case ".png":
+		w.Header().Set("Content-Type", "image/png")
+	case ".jpg", ".jpeg":
+		w.Header().Set("Content-Type", "image/jpeg")
+	case ".pdf":
+		w.Header().Set("Content-Type", "application/pdf")
+	default:
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
+	http.ServeFile(w, r, path)
 }
 
 // writePrivateContinue is a 200 page that carries the cookie change and
 // moves on to /private from the browser side.
-func writePrivateContinue(w http.ResponseWriter, msg string) {
+func writePrivateContinue(w http.ResponseWriter, msg, next string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/private"><title>BreedOS private</title>%s</head><body><main><p>%s <a href="/private">Continue</a></p></main></body></html>`, privateStyle, html.EscapeString(msg))
+	next = html.EscapeString(privateNext(next))
+	fmt.Fprintf(w, `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=%s"><title>BreedOS private</title>%s</head><body><main><p>%s <a href="%s">Continue</a></p></main></body></html>`, next, privateStyle, html.EscapeString(msg), next)
 }
 
 func writePrivateRoom(w http.ResponseWriter, user string) {
@@ -375,11 +482,19 @@ func writePrivateRoom(w http.ResponseWriter, user string) {
 
 // privateHashCommand implements `-private-hash user:password`.
 func privateHashCommand(spec string) (string, error) {
-	u, p, ok := strings.Cut(spec, ":")
-	if !ok || strings.TrimSpace(u) == "" || p == "" {
-		return "", fmt.Errorf("use -private-hash user:password")
+	u, rest, ok := strings.Cut(spec, ":")
+	if !ok || strings.TrimSpace(u) == "" || rest == "" {
+		return "", fmt.Errorf("use -private-hash user:password[:areas]")
 	}
-	return strings.TrimSpace(u) + ":" + privateHash(strings.TrimSpace(u), p), nil
+	p, areas, hasAreas := strings.Cut(rest, ":")
+	if p == "" {
+		return "", fmt.Errorf("use -private-hash user:password[:areas]")
+	}
+	line := strings.TrimSpace(u) + ":" + privateHash(strings.TrimSpace(u), p)
+	if hasAreas && strings.TrimSpace(areas) != "" {
+		line += ":" + strings.TrimSpace(areas)
+	}
+	return line, nil
 }
 
 // privateJSON is a small helper for tests.

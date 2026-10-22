@@ -5,6 +5,7 @@
 #   ./set_private_password.sh                 # random 16-char password, printed
 #   ./set_private_password.sh 'my-password'   # this password
 #   ./set_private_password.sh 'my-password' alice   # for user "alice" (default: breedos)
+#   ./set_private_password.sh 'my-password' mynotes notes   # areas: data (tables, /private), notes (/mynotes); default data
 #
 # The server stores only sha256(user:password) in <engine>/private/auth; the
 # password itself is sent nowhere — the hash is computed here and written
@@ -29,6 +30,8 @@ engine="${target#*:}"
 
 password="${1:-}"
 user="${2:-breedos}"
+areas="${3:-data}"
+case "$areas" in *:*|*' '*) echo "areas: comma-separated, e.g. data,notes" >&2; exit 2;; esac
 case "$user" in *:*|*' '*|'') echo "user must be one word without ':'" >&2; exit 2;; esac
 if [ -z "$password" ]; then
   password="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16)"
@@ -38,12 +41,12 @@ else
 fi
 
 hash="$(printf '%s:%s' "$user" "$password" | sha256sum | cut -d' ' -f1)"
-line="$user:$hash"
+line="$user:$hash:$areas"
 
 # Replace this user's line, keep the others, create the file if missing.
 ssh -o BatchMode=yes "$host" "set -e; d='$engine/private'; mkdir -p \"\$d/data\"; chmod 700 \"\$d\"; f=\"\$d/auth\"; touch \"\$f\"; chmod 600 \"\$f\"; { grep -v -E '^$user:' \"\$f\" || true; echo '$line'; } > \"\$f.new\"; mv \"\$f.new\" \"\$f\"; chmod 600 \"\$f\"; echo \"users now: \$(grep -c -v -E '^#|^\$' \"\$f\")\""
 
-echo "user:     $user"
+echo "user:     $user  (areas: $areas)"
 if [ "$generated" = 1 ]; then
   echo "password: $password   (generated — keep it somewhere outside git)"
 else

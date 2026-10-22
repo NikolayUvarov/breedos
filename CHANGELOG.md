@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.18] - 2026-10-22
+
+### Added — private notes and per-user areas
+
+- `/mynotes/` serves the files in `private/notes/` next to the binary
+  (HTML pages, text, images, PDF) behind the login; `/mynotes/` lists
+  them. A request without a session gets the login form and returns to
+  the requested page after it.
+- `private/auth` lines may carry areas: `user:hash:data,notes`. `data`
+  is the data room, the private tables and `/private/data/`; `notes` is
+  `/mynotes/`. Lines without areas mean `data`. A login outside its
+  area gets the form again. `-private-hash user:password:areas` and
+  `set_private_password.sh password user areas` write such lines.
+
 ## [0.8.17] - 2026-10-21
 
 ### Fixed — upload panel spilled over the results column
