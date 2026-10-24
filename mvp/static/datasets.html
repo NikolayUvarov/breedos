@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>BreedOS Datasets — public wheat genotype panels</title>
+  <title>BreedOS Datasets — public genotype panels</title>
   <meta name="description" content="Curated list of public wheat genotype datasets BreedOS can ingest. Shows original size, size currently on server, status, source URL, and content for each.">
   <link rel="icon" type="image/x-icon" href="/favicon.ico">
   <link rel="stylesheet" href="/style.css">
@@ -20,7 +20,7 @@
   <main class="wrap section">
     <div class="card" style="margin-bottom:18px">
       <div class="kicker">v0.7.31 — datasets registry</div>
-      <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Curated public wheat datasets</h1>
+      <h1 style="font-size:clamp(36px,5vw,62px); margin-bottom:12px">Curated public datasets</h1>
       <p class="lede">
         Real wheat genotype data that BreedOS can load as a founder population. Below: original archive size, size currently deployed on the server, download source, license, and a one-line content summary. Small datasets are mirrored fully; large datasets are truncated to the first 100 MB on the server unless an explicit full-upload deploy was made.
       </p>
@@ -52,6 +52,9 @@
     </div>
 
     <div class="card" id="generatedDatasetsCard" hidden>
+      <h2 style="margin-top:0">Embedded real datasets <small style="color:var(--muted); font-weight:400; font-size:14px">— shipped inside the binary, no download</small></h2>
+      <p class="note">Small published tables that travel with BreedOS itself. Pick them under <em>Founder population</em> in the demo or set <code>dataset = &lt;id&gt;</code> in the API. Each carries its citation and licence.</p>
+      <div id="embeddedDatasetsList" style="margin-bottom:22px"></div>
       <h2 style="margin-top:0">Generated datasets <small style="color:var(--muted); font-weight:400; font-size:14px">— in-memory simulators, no download</small></h2>
       <p class="note">These are not file-based datasets; the simulator builds them on demand. Use them by setting <code>dataset = &lt;id&gt;</code> in the demo or API. They are deliberately synthetic; real data sources are linked alongside.</p>
       <div id="generatedDatasetsList"></div>
@@ -59,7 +62,7 @@
   </main>
 
   <footer class="footer">
-    <div class="wrap">BreedOS MVP v0.8.18 — decision-layer simulator, not a wet-lab protocol. <a href="https://github.com/NikolayUvarov/breedos">View source on GitHub</a>.</div>
+    <div class="wrap">BreedOS MVP v0.8.19 — decision-layer simulator, not a wet-lab protocol. <a href="https://github.com/NikolayUvarov/breedos">View source on GitHub</a>.</div>
   </footer>
 
   <script>
@@ -122,6 +125,19 @@
         status.textContent = (data.description || '') + ' Truncation cap for large datasets: ' + (data.deploy_truncate_mb || '?') + ' MB.';
         status.className = 'status ok';
         wrap.hidden = false;
+        // v0.8.19. Embedded real datasets (citation + licence).
+        const emb = data.embedded_datasets || [];
+        const embList = document.getElementById('embeddedDatasetsList');
+        if (embList && emb.length) {
+          embList.innerHTML = emb.map(d => `
+            <div class="card mini" style="margin-bottom:12px;">
+              <h3 style="margin:0 0 6px;">${escapeHtml(d.name)} <small style="color:var(--muted); font-weight:400;">— <code>${escapeHtml(d.id)}</code></small></h3>
+              <p style="margin:0 0 8px;">${escapeHtml(d.description)}</p>
+              <p style="margin:0 0 6px; font-size:13px;"><strong>Cite:</strong> ${escapeHtml(d.citation)} · <a href="${escapeHtml(d.landing_url)}">article</a> · <a href="${escapeHtml(d.source_url)}">source file</a></p>
+              <p style="margin:0; font-size:13px; color:var(--muted);">${d.accessions} accessions × ${d.loci} loci, ${d.alleles} alleles · licence ${escapeHtml(d.license)}</p>
+            </div>
+          `).join('');
+        }
         // v0.7.23 — Issue E. Render the generated-datasets section.
         const gen = data.generated_datasets || [];
         const genWrap = document.getElementById('generatedDatasetsCard');

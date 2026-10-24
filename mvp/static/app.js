@@ -402,6 +402,37 @@ const presets = {
     inbreeding_limit: 0.25,
     diversity_loss_limit: 0.30
   },
+  // v0.8.19. Real sorghum SSR collection (embedded dataset), line breeding:
+  // the demo from the VNIISB meeting — which strategy keeps the alleles.
+  sorghum_ssr: {
+    dataset: 'sorghum_vir200',
+    cycle_years: 0,
+    genomic_cycle_years: 0,
+    mating_system: 'ssd',
+    ploidy: 0,
+    pyramid_genes: 0,
+    target_loci: [],
+    marker_distance_cm: 0,
+    backcross_generations: 3,
+    recurrent_parent: '',
+    ssd_generations: 4,
+    seed: 20260505,
+    population_size: 400,
+    markers: 900,
+    qtl_count: 15,
+    generations: 15,
+    selection_percent: 10,
+    heritability: 0.4,
+    mutation_rate: 0.00005,
+    crispr_enabled: false,
+    crispr_edits: 0,
+    crispr_intro_percent: 0,
+    strategy_set: 'advanced',
+    replicates: 5,
+    worker_count: 0,
+    inbreeding_limit: 0.25,
+    diversity_loss_limit: 0.30
+  },
   // v0.8.11. Autotetraploid outcrossing population (potato-like).
   potato_tetraploid: {
     dataset: 'synthetic',
@@ -796,6 +827,7 @@ function applyPreset(name) {
     crispr: 'CRISPR seed demo',
     gs_years: 'GS vs phenotype on a calendar axis (5-year vs 2.5-year cycles)',
     rice_pyramid: 'Rice: pyramid 3 blast-resistance genes by MAS (SSD lines)',
+    sorghum_ssr: 'Sorghum: VIR collection, 200 accessions × 12 SSR (real data, CC BY 4.0) — which strategy keeps the alleles',
     potato_tetraploid: 'Potato-like autotetraploid population (random mating)',
     wheat_lines: 'Wheat-style line breeding: crosses → SSD (F5 lines), 5-year cycle, GS at 2.5 years',
     holstein: 'Holstein dairy (educational — no sexes or overlapping generations)',

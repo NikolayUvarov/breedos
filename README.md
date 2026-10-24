@@ -175,6 +175,8 @@ Two-column headers may also be `LOCUS_allele 1` / `LOCUS_allele 2`, and diploid 
 
 Each allele becomes an indicator marker, and the indicators of a locus sit at one map position, so a locus is always inherited as a unit. Reports add Nei's expected heterozygosity per locus and `alleles_retained`, the number of SSR alleles each strategy keeps. The upload summary lists every locus with its alleles, He, observed heterozygosity, PIC and missing calls.
 
+**Built-in SSR dataset.** `dataset: "sorghum_vir200"` (demo: Founder population → "Sorghum, VIR collection", preset "Sorghum VIR (SSR)") loads the genetic passports of 200 sorghum accessions of the Vavilov Institute collection by 12 SSR loci — Aniskina Yu. V., Malinovskaya E. V., Mitsurova V. S., Velishaeva N. S., Kolobova O. S., Shilov I. A. (2019), Plant Biotechnology and Breeding 2(3), doi:10.30901/2658-6266-2019-3-o1, CC BY 4.0. It ships inside the binary (`mvp/data/sorghum_vir200.csv`).
+
 **Founder set.** `POST /api/founder-set {"upload": "<id>", "size": 20}` returns the accessions of an uploaded table that keep the most alleles (greedy maximum coverage), the coverage curve, the smallest greedy set holding every allele, He of the set, and what random sets of that size keep on average.
 
 SSR alleles are not CRISPR edit targets.

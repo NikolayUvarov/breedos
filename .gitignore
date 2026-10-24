@@ -25,3 +25,4 @@ breedos-*
 # binary by deploy_breedos.sh. Only the small placeholder fixture stays in git.
 mvp/data/*.csv
 !mvp/data/example_founders.csv
+!mvp/data/sorghum_vir200.csv

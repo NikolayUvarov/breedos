@@ -46,7 +46,7 @@ import (
 // and uploaded to the server by deploy_breedos.sh as separate files alongside
 // the binary.
 
-//go:embed data/example_founders.csv
+//go:embed data/example_founders.csv data/sorghum_vir200.csv
 var embeddedDatasets embed.FS
 
 type loadedDataset struct {

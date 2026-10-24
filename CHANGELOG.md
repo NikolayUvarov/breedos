@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.19] - 2026-10-24
+
+### Added — the VIR sorghum SSR collection as a built-in dataset
+
+- `dataset: "sorghum_vir200"`: genetic passports of 200 sorghum
+  accessions of the Vavilov Institute collection by 12 SSR loci, 230
+  alleles — Aniskina et al. (2019), Plant Biotechnology and Breeding
+  2(3), doi:10.30901/2658-6266-2019-3-o1, CC BY 4.0. Transcribed from
+  the paper's appendix and checked row by row; embedded in the binary.
+- Demo: "Sorghum, VIR collection" under Founder population and the
+  preset "Sorghum VIR (SSR)" (SSD lines, advanced strategies, 15
+  generations, 5 replicates).
+- `/datasets` gains an "Embedded real datasets" section with the
+  citation and licence (`embedded_datasets` in `/api/datasets`); the
+  page is no longer wheat-only in its wording.
+
 ## [0.8.18] - 2026-10-22
 
 ### Added — private notes and per-user areas
